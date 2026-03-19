@@ -2,14 +2,15 @@ export interface Source {
   id: string;
   title: string;
   url: string;
-  type: 'Primary' | 'Secondary' | 'Archive' | 'Other';
+  type: 'Primary' | 'Secondary' | 'Archive' | 'Upload' | 'Other';
   addedAt: string;
   notes?: string;
+  content?: string;
 }
 
-export interface Node {
-  node_id: string;
-  node_type: 'Person' | 'Institution' | 'Document' | 'Event' | 'Financial' | 'Gap';
+export interface EvidenceRecord {
+  record_id: string;
+  record_type: 'Person' | 'Institution' | 'Document' | 'Event' | 'Financial' | 'Gap' | 'Location' | 'Record Group' | 'Artifact' | 'Communication' | 'Policy' | 'Other';
   status: 'verified' | 'unverified' | 'gap' | 'incomplete' | 'contested';
   label: string;
   description: string;
@@ -60,17 +61,32 @@ export interface InvestigationItem {
   createdAt: string;
 }
 
+export interface Edge {
+  source: string;
+  target: string;
+  label: string;
+}
+
+export interface SubClaim {
+  id: string;
+  claim: string;
+  description: string;
+}
+
 export interface ResearchResponse {
-  neutralized: {
+  original_claim: string;
+  sub_claims: SubClaim[];
+  neutralized?: {
     neutralized_claim: string;
     testable_form: string;
     evidence_categories: string[];
   };
-  blueprint: {
+  blueprint?: {
     checklist: any[];
   };
-  results: Node[];
+  results: EvidenceRecord[];
   bridges: {
     bridge_candidates: BridgeCandidate[];
   };
+  links: Edge[];
 }

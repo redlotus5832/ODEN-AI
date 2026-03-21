@@ -1,21 +1,78 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud, Link as LinkIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { ResearchResponse, EvidenceRecord, BridgeCandidate, Request, Source, ChatMessage, InvestigationItem, SubClaim } from './types';
+import { normalizeInstitution, generateFingerprint } from "./utils/normalization";
+import { ResearchResponse, EvidenceRecord, BridgeCandidate, Request, Source, ChatMessage, InvestigationItem, SubClaim, Suggestions } from './types';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// --- Error Boundary ---
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: any }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-stone-50 flex items-center justify-center p-8">
+          <div className="max-w-md w-full border-2 border-black p-8 bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-2xl font-serif italic mb-4 flex items-center gap-2">
+              <AlertTriangle className="text-red-600" />
+              Research Interrupted.
+            </h2>
+            <p className="text-sm opacity-60 mb-6 leading-relaxed">
+              An unexpected error occurred in the ODEN system. This might be due to a data inconsistency or a temporary glitch.
+            </p>
+            <div className="p-4 bg-red-50 border border-red-200 text-[10px] font-mono mb-6 overflow-auto max-h-40">
+              {this.state.error?.toString()}
+            </div>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-black text-white py-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all"
+            >
+              Restart Session
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <ODENApp />
+    </ErrorBoundary>
+  );
+}
+
+function ODENApp() {
   const [researchStep, setResearchStep] = useState<number>(0);
   const [claim, setClaim] = useState('');
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ResearchResponse | null>(null);
-  const [activeTab, setActiveTab] = useState<'guide' | 'pipeline' | 'dossier' | 'list' | 'chat' | 'requests' | 'investigation' | 'suggestions' | 'document-sync'>('guide');
+  const [activeTab, setActiveTab] = useState<'guide' | 'pipeline' | 'dossier' | 'list' | 'chat' | 'requests' | 'investigation' | 'suggestions' | 'sources' | 'data-management'>('guide');
+  const [dossierSort, setDossierSort] = useState<'default' | 'strength' | 'impact'>('default');
+  const [dossierFilter, setDossierFilter] = useState<'all' | 'verified' | 'contested' | 'gap'>('all');
   const [prevTab, setPrevTab] = useState<typeof activeTab>('guide');
   const [isMobile, setIsMobile] = useState(false);
   const [chatInput, setChatInput] = useState('');
@@ -28,7 +85,9 @@ export default function App() {
   };
 
   const addSource = (newSource: Source) => {
-    setSources(prev => [newSource, ...prev]);
+    const normalized = normalizeInstitution(newSource.institution || '');
+    const sourceWithNormalized = { ...newSource, institution_normalized: normalized };
+    setSources(prev => [sourceWithNormalized, ...prev]);
     setEditingSource(null);
   };
 
@@ -39,7 +98,7 @@ export default function App() {
 
   // Track previous tab for "Close" buttons
   useEffect(() => {
-    if (activeTab !== 'suggestions' && activeTab !== 'document-sync') {
+    if (activeTab !== 'suggestions' && activeTab !== 'data-management') {
       setPrevTab(activeTab);
     }
   }, [activeTab]);
@@ -66,21 +125,7 @@ export default function App() {
   const [editingResearchPoint, setEditingResearchPoint] = useState<InvestigationItem | null>(null);
   const [investigationFilter, setInvestigationFilter] = useState<'All' | 'High' | 'Medium' | 'Low'>('All');
   const [investigationSearch, setInvestigationSearch] = useState('');
-  const [suggestions, setSuggestions] = useState<{ 
-    bridges: any[], 
-    gaps: any[],
-    researchAreas: any[],
-    crossovers: any[],
-    entities: any[],
-    anomalies: any[],
-    conflicts: any[],
-    keyActors: any[],
-    methodologicalAdvice: any[],
-    institutionalGaps: any[],
-    structuralAnomalies: any[],
-    patternRecognition: any[],
-    riskAssessment: any[]
-  }>({ 
+  const [suggestions, setSuggestions] = useState<Suggestions>({ 
     bridges: [], 
     gaps: [], 
     researchAreas: [], 
@@ -144,6 +189,7 @@ export default function App() {
   
   const [sourceSearch, setSourceSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'All' | 'Primary' | 'Secondary' | 'Archive' | 'Upload' | 'Other'>('All');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const downloadChatLog = () => {
     const log = chatMessages.map(m => `[${new Date(m.timestamp).toLocaleString()}] ${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
@@ -241,7 +287,8 @@ export default function App() {
       
       Use Google Search to identify relevant archives, government agencies, or record-keeping bodies.
       
-      Output ONLY valid JSON: { "checklist": [{ "item_id": string, "description": string, "expected_location": string, "priority": "high" | "medium" | "low" }] }.`,
+      Output ONLY valid JSON: { "checklist": [{ "item_id": string, "description": string, "expected_location": string, "priority": "high" | "medium" | "low" }] }. 
+      Limit to the 5-7 most critical institutional records.`,
       config: {
         tools: [{ googleSearch: {} }],
         responseMimeType: "application/json",
@@ -273,7 +320,8 @@ export default function App() {
     const genAI = getGenAI();
     const filesContext = uploadedFiles && uploadedFiles.length > 0
       ? `USER UPLOADED NOTES/DOCUMENTS:\n${uploadedFiles.map((f: any) => `FILE: ${f.name}\nCONTENT: ${f.content}`).join('\n\n')}\n\n`
-      : '';      const response = await genAI.models.generateContent({
+      : '';
+    const response = await genAI.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: [
         { parts: [{ text: `You are an ODEN Primary Source Researcher. Your task is to investigate a specific checklist item strictly against primary sources and user-provided data.
@@ -289,13 +337,34 @@ export default function App() {
       1. PRIMARY SOURCES ONLY for verification: original documents, institutional records, physical evidence, direct testimony.
       2. USER UPLOADED DATA: If the user has provided notes or documents that directly confirm or refute this item, prioritize them as primary source evidence.
       3. SECONDARY SOURCES (Wikipedia, news accounts, documentaries, academic reconstructions) DO NOT qualify as verification. They only inform the search.
-      4. NO INFERENCE: Do not connect dots. Report only what is explicitly documented.
-      5. ENTITY RECOGNITION: Identify all specific people, organizations, agencies, departments, locations, and dates mentioned in the sources.
-      6. URL EXTRACTION: If the research reveals specific URLs to archival finding aids, digital records, or institutional portals, include them.
+      4. REASONING DEPTH: Break down what information was observed, explain what connects those pieces, and explain why that connection is meaningful.
+      5. SIGNAL VS NOISE: Distinguish between strong signals (direct support), weak signals (context), and noise.
+      6. ENTITY RECOGNITION: Identify all specific people, organizations, agencies, departments, locations, and dates mentioned in the sources.
+      7. INSTITUTION NORMALIZATION: Use canonical names for institutions (e.g., "National Archives and Records Administration" instead of "NARA").
       
       Use Google Search to find the specific record at the expected location. Search for archival finding aids, record group descriptions, or digital repositories.
       
-      Output ONLY valid JSON: { "item_id": string, "source_found": boolean, "source_type": "primary" | "secondary" | "none", "citation": string | null, "citation_url": string | null, "raw_result": string, "timeline_date": string | null, "research_preview": string, "entities": string[] }.` }] }
+      Output ONLY valid JSON: { 
+        "item_id": string, 
+        "source_found": boolean, 
+        "classification": "verified" | "unverified" | "contested" | "gap",
+        "label": string,
+        "description": string,
+        "observed_content": string,
+        "connection_logic": string,
+        "significance": string,
+        "impact": "Supports" | "Weakens" | "Complicates" | "Leaves Open",
+        "strength": "Strong" | "Weak" | "Noise",
+        "suggestions": string,
+        "missing_verification": string,
+        "citation": string | null, 
+        "citation_url": string | null, 
+        "raw_result": string, 
+        "timeline_date": string | null, 
+        "research_preview": string, 
+        "entities": string[],
+        "institution_normalized": string
+      }.` }] }
       ],
       config: {
         tools: [{ googleSearch: {} }],
@@ -305,73 +374,267 @@ export default function App() {
           properties: {
             item_id: { type: Type.STRING },
             source_found: { type: Type.BOOLEAN },
-            source_type: { type: Type.STRING, enum: ["primary", "secondary", "none"] },
+            classification: { type: Type.STRING, enum: ["verified", "unverified", "contested", "gap"] },
+            label: { type: Type.STRING },
+            description: { type: Type.STRING },
+            observed_content: { type: Type.STRING },
+            connection_logic: { type: Type.STRING },
+            significance: { type: Type.STRING },
+            impact: { type: Type.STRING, enum: ["Supports", "Weakens", "Complicates", "Leaves Open"] },
+            strength: { type: Type.STRING, enum: ["Strong", "Weak", "Noise"] },
+            suggestions: { type: Type.STRING },
+            missing_verification: { type: Type.STRING },
             citation: { type: Type.STRING, nullable: true },
             citation_url: { type: Type.STRING, nullable: true },
             raw_result: { type: Type.STRING },
             timeline_date: { type: Type.STRING, nullable: true },
             research_preview: { type: Type.STRING },
             entities: { type: Type.ARRAY, items: { type: Type.STRING } },
+            institution_normalized: { type: Type.STRING },
           },
-          required: ["item_id", "source_found", "source_type", "raw_result", "research_preview", "entities"],
+          required: [
+            "item_id", "source_found", "classification", "label", "description", 
+            "observed_content", "connection_logic", "significance", "impact", 
+            "strength", "suggestions", "missing_verification", "raw_result", 
+            "research_preview", "entities", "institution_normalized"
+          ],
         },
       },
     });
     return JSON.parse(response.text || "{}");
   };
 
-  const runDeepAnalysis = async (data: any, chatMessages: ChatMessage[]) => {
+  const runDeepAnalysis = async (data: any, chatMessages: ChatMessage[], focus?: string) => {
     const genAI = getGenAI();
     const response = await genAI.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `You are a Lead Investigator for the ODEN Research System. 
-      Perform a deep structural analysis of the current research state.
+      contents: `You are the ODEN Senior Research Strategist. 
+      Perform a "Deep Structural Analysis" on the current research state.
       
-      CURRENT RESEARCH DATA: ${JSON.stringify(data?.results?.map((n: any) => ({ id: n.record_id, label: n.label, status: n.status, description: n.description, type: n.record_type, entities: n.entities })) || [])}
-      CONVERSATION HISTORY: ${JSON.stringify(chatMessages.slice(-10))}
+      CURRENT DATA: ${JSON.stringify(data?.results || [])}
+      CHAT HISTORY: ${JSON.stringify(chatMessages.slice(-5))}
+      FOCUS: ${focus || 'General structural analysis'}
       
-      TASK:
-      1. Identify "Structural Bridges": Entities or events that connect independent threads.
-      2. Identify "Archival Gaps": Missing records that should exist by protocol or institutional logic.
-      3. Suggest "Research Areas": New institutional domains or record groups to investigate based on current findings.
-      4. Identify "Interesting Crossovers": Non-obvious patterns, coincidences, or recurring actors that warrant scrutiny.
-      5. Identify "Institutional Entities": Key organizations, agencies, or departments that appear central to the narrative.
-      6. Detect "Timeline Anomalies": Dates, sequences, or durations that seem out of order, structurally impossible, or historically inconsistent.
-      7. Identify "Evidence Conflicts": Contradictory records or conflicting accounts that need reconciliation.
-      8. Identify "Key Actors": Central figures in the investigation, their roles, and potential motivations.
-      9. Provide "Methodological Advice": Strategic suggestions on how to improve the current research process or documentation.
-      10. Identify "Institutional Gaps": Missing links in the chain of command or process.
-      11. Identify "Structural Anomalies": Data points that violate institutional protocols.
-      12. Identify "Pattern Recognition": Recurring motifs or procedural behaviors.
-      13. Provide "Risk Assessment": Potential pitfalls or areas of high uncertainty.
+      ANALYSIS GOALS:
+      1. Identify "Bridge Records": Entities (people, institutions, locations) that appear across multiple independent threads.
+      2. Identify "Evidence Conflicts": Contradictory data points that require resolution.
+      3. Identify "Institutional Gaps": Systemic absences in record groups that should exist based on institutional process.
+      4. Identify "Structural Anomalies": Deviations from standard institutional, financial, or social logic.
+      5. Identify "Pattern Recognition": Recurring structural signatures across different domains.
+      6. Identify "Risk Assessment": Methodological risks and potential biases in the current findings.
+      7. Identify "Key Actors": Central figures, organizations, or systems identified across the research.
+      8. Identify "Methodological Advice": Specific, actionable advice for the next phase of research.
+      9. Identify "Research Areas": New institutional or data domains suggested by the structural nexus.
+      10. Identify "Crossovers": Specific points where different domains (e.g., financial activity ↔ policy decisions) intersect.
       
-      Output ONLY valid JSON: {
-        "bridges": [{ "label": string, "reason": string, "records": string[] }],
-        "gaps": [{ "label": string, "description": string, "record_id": string | null }],
-        "researchAreas": [{ "title": string, "description": string, "priority": "High" | "Medium" | "Low" }],
-        "crossovers": [{ "title": string, "description": string, "significance": string }],
-        "entities": [{ "name": string, "type": string, "relevance": string }],
-        "anomalies": [{ "title": string, "description": string, "impact": string }],
-        "conflicts": [{ "title": string, "description": string, "resolution": string }],
-        "keyActors": [{ "name": string, "role": string, "significance": string }],
-        "methodologicalAdvice": [{ "title": string, "advice": string }],
-        "institutionalGaps": [{ "label": string, "description": string }],
-        "structuralAnomalies": [{ "title": string, "description": string }],
-        "patternRecognition": [{ "title": string, "description": string }],
-        "riskAssessment": [{ "title": string, "risk": string, "mitigation": string }]
-      }.`,
+      For each conclusion, provide detailed reasoning:
+      - What information was observed?
+      - What connects these pieces?
+      - Why is the connection meaningful?
+      - What does it suggest (without overstating certainty)?
+      - What is still missing?
+      
+      Distinguish between Strong Signals, Weak Signals, and Noise.
+      
+      Output ONLY valid JSON matching the schema.`,
       config: {
         responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            summary: { type: Type.STRING },
+            bridges: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  label: { type: Type.STRING },
+                  reason: { type: Type.STRING },
+                  records: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ["label", "reason", "records"],
+              },
+            },
+            gaps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  label: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["label", "description"],
+              },
+            },
+            researchAreas: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                },
+                required: ["title", "description", "priority"],
+              },
+            },
+            crossovers: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  significance: { type: Type.STRING },
+                },
+                required: ["title", "description", "significance"],
+              },
+            },
+            entities: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  relevance: { type: Type.STRING },
+                },
+                required: ["name", "type", "relevance"],
+              },
+            },
+            anomalies: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  impact: { type: Type.STRING },
+                },
+                required: ["title", "description", "impact"],
+              },
+            },
+            conflicts: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  resolution: { type: Type.STRING },
+                },
+                required: ["title", "description", "resolution"],
+              },
+            },
+            keyActors: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  role: { type: Type.STRING },
+                  significance: { type: Type.STRING },
+                },
+                required: ["name", "role", "significance"],
+              },
+            },
+            methodologicalAdvice: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  advice: { type: Type.STRING },
+                },
+                required: ["title", "advice"],
+              },
+            },
+            institutionalGaps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  label: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["label", "description"],
+              },
+            },
+            structuralAnomalies: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["title", "description"],
+              },
+            },
+            patternRecognition: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["title", "description"],
+              },
+            },
+            riskAssessment: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  risk: { type: Type.STRING },
+                  mitigation: { type: Type.STRING },
+                },
+                required: ["title", "risk", "mitigation"],
+              },
+            },
+            reasoning: { type: Type.STRING, description: "Detailed breakdown of OBSERVED, CONNECTION, SIGNIFICANCE, and GAPS." },
+            citations: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  url: { type: Type.STRING },
+                  institution: { type: Type.STRING }
+                },
+                required: ["title", "url"]
+              },
+              description: "List of real source links supporting your analysis."
+            },
+          },
+          required: [
+            "summary", "bridges", "gaps", "researchAreas", "crossovers", 
+            "entities", "anomalies", "conflicts", "keyActors", 
+            "methodologicalAdvice", "institutionalGaps", "structuralAnomalies", 
+            "patternRecognition", "riskAssessment", "reasoning"
+          ],
+        },
       },
     });
     return JSON.parse(response.text || "{}");
   };
 
-  const handleDeepAnalysis = async () => {
+  const handleDeepAnalysis = async (focus?: string) => {
     if (!data) return;
     setIsAnalyzingSuggestions(true);
+    
+    // Add a "thinking" message to the strategist chat
+    const thinkingMsg: ChatMessage = { 
+      role: 'assistant', 
+      content: `Initiating deep structural research${focus ? ` focusing on ${focus}` : ''}... Analyzing ${data.results.length} evidence points across the system.`, 
+      timestamp: new Date().toISOString() 
+    };
+    setSuggestionChatMessages(prev => [...prev, thinkingMsg]);
+
     try {
-      const result = await runDeepAnalysis(data, chatMessages);
+      const result = await runDeepAnalysis(data, chatMessages, focus);
       setSuggestions({
         bridges: result.bridges || [],
         gaps: result.gaps || [],
@@ -385,11 +648,32 @@ export default function App() {
         institutionalGaps: result.institutionalGaps || [],
         structuralAnomalies: result.structuralAnomalies || [],
         patternRecognition: result.patternRecognition || [],
-        riskAssessment: result.riskAssessment || []
+        riskAssessment: result.riskAssessment || [],
+        summary: result.summary || ''
       });
+
+      // Add the summary to the chat
+      if (result.summary) {
+        const summaryMsg: ChatMessage = { 
+          role: 'assistant', 
+          content: result.summary, 
+          reasoning: result.reasoning,
+          entities: result.entities,
+          citations: result.citations,
+          timestamp: new Date().toISOString() 
+        };
+        setSuggestionChatMessages(prev => [...prev, summaryMsg]);
+      }
     } catch (err: any) {
       console.error("Deep Analysis Error:", err);
       setError("Failed to run deep analysis: " + err.message);
+      
+      const errorMsg: ChatMessage = { 
+        role: 'assistant', 
+        content: `Research failed: ${err.message}. Please try again or refine your research seed.`, 
+        timestamp: new Date().toISOString() 
+      };
+      setSuggestionChatMessages(prev => [...prev, errorMsg]);
     } finally {
       setIsAnalyzingSuggestions(false);
     }
@@ -413,12 +697,143 @@ export default function App() {
         USER QUESTION: "${message}"
         
         Provide strategic advice, suggest new search queries, or help the researcher understand the structural significance of their findings. Keep it professional, analytical, and focused on institutional evidence. Use the term "record" instead of "card" or "node".`,
+        config: {
+          systemInstruction: `You are the ODEN Research Strategist. Your goal is to provide deep structural analysis and strategic guidance.
+          
+          CORE METHODOLOGY:
+          1. REASONING DEPTH (MANDATORY): For every conclusion or claim, you MUST break down:
+             - OBSERVED: What raw data or record was seen.
+             - CONNECTION: What structural link connects these pieces.
+             - SIGNIFICANCE: Why this is meaningful to the investigation.
+             - GAPS: What is still missing or needs verification.
+             This reasoning MUST be provided in the 'reasoning' field of your JSON response.
+          2. REAL LINKS & CITATIONS: You MUST provide real source links for your claims. Use the 'googleSearch' tool to find official archive pages, repository links, or direct record URLs. Populate the 'citations' array with these findings.
+          3. SIGNAL VS NOISE: Prioritize "Strong Signals" (direct records) over "Contextual Noise" (indirect indicators).
+          4. INSTITUTIONAL NORMALIZATION: Always use canonical names (e.g., "NARA" becomes "National Archives and Records Administration").
+          5. NO GUESSING: If a destination or email is unknown, state that you are searching for the most likely office based on institutional process. Do not hallucinate specific people.
+          
+          TONE: Confident, investigative, natural. No robotic disclaimers. Show the path you took to get there.`,
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              response: { type: Type.STRING, description: "Your natural language response, including inline Markdown links." },
+              reasoning: { type: Type.STRING, description: "Detailed breakdown of OBSERVED, CONNECTION, SIGNIFICANCE, and GAPS." },
+              entities: { type: Type.ARRAY, items: { type: Type.STRING } },
+              citations: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    url: { type: Type.STRING },
+                    institution: { type: Type.STRING }
+                  },
+                  required: ["title", "url"]
+                },
+                description: "List of real source links supporting your response."
+              },
+              actions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    type: { type: Type.STRING, enum: ["add_log", "add_evidence", "add_request", "update_request", "update_evidence", "update_status"] },
+                    data: { type: Type.OBJECT },
+                  },
+                  required: ["type", "data"],
+                },
+                nullable: true,
+              }
+            },
+            required: ["response", "entities", "reasoning"],
+          },
+        },
       });
       
-      const aiMsg: ChatMessage = { role: 'ai', content: response.text || "I'm analyzing the data...", timestamp: new Date().toISOString() };
+      const result = JSON.parse(response.text || "{}");
+      const aiTimestamp = new Date().toISOString();
+
+      // Handle actions (same as handleChat)
+      if (result.actions && result.actions.length > 0) {
+        result.actions.forEach((action: any) => {
+          if (action.type === 'add_log') {
+            const newPoint: InvestigationItem = {
+              ...action.data,
+              id: Math.random().toString(36).substr(2, 9),
+              status: 'Pending',
+              createdAt: aiTimestamp
+            };
+            setResearchPoints(prev => [newPoint, ...prev]);
+          } else if (action.type === 'add_evidence') {
+            const newEvidence: EvidenceRecord = {
+              ...action.data,
+              record_id: Math.random().toString(36).substr(2, 9),
+              status: action.data.status || 'unverified',
+              citation_type: action.data.citation_type || 'none',
+              weight: action.data.weight || 5,
+              impact: action.data.impact || 'Leaves Open',
+              strength: action.data.strength || 'Noise'
+            };
+            setData(prev => {
+              if (!prev) return { 
+                original_claim: claim || 'AI Suggested Research',
+                sub_claims: [],
+                results: [newEvidence], 
+                bridges: []
+              };
+              return { ...prev, results: [...prev.results, newEvidence] };
+            });
+          } else if (action.type === 'add_request') {
+            const newRequest: Request = {
+              ...action.data,
+              id: Math.random().toString(36).substr(2, 9),
+              status: 'Draft',
+              createdAt: aiTimestamp,
+              fingerprint: generateFingerprint(action.data.institution_normalized || '', action.data.department || '', action.data.subject || '')
+            };
+            addRequest(newRequest);
+          } else if (action.type === 'update_request') {
+            const { id, body, status } = action.data;
+            setRequests(prev => prev.map(r => r.id === id ? { 
+              ...r, 
+              body: r.body.includes(body) ? r.body : `${r.body}\n\n--- AI MERGED UPDATE ---\n${body}`,
+              status: status || r.status 
+            } : r));
+          } else if (action.type === 'update_evidence') {
+            const updatedRecord = action.data;
+            setData(prev => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                results: prev.results.map(n => n.record_id === updatedRecord.record_id ? { ...n, ...updatedRecord } : n)
+              };
+            });
+          } else if (action.type === 'update_status') {
+            const { id, status, type } = action.data;
+            if (type === 'log') {
+              setResearchPoints(prev => prev.map(p => p.id === id ? { ...p, status } : p));
+            } else if (type === 'request') {
+              setRequests(prev => prev.map(r => r.id === id ? { ...r, status } : r));
+            }
+          }
+        });
+      }
+      
+      const aiMsg: ChatMessage = { 
+        role: 'assistant', 
+        content: result.response, 
+        reasoning: result.reasoning,
+        entities: result.entities,
+        citations: result.citations,
+        actions: result.actions,
+        timestamp: aiTimestamp 
+      };
       setSuggestionChatMessages(prev => [...prev, aiMsg]);
     } catch (err: any) {
       console.error("Suggestion Chat Error:", err);
+      setSuggestionChatMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}`, timestamp: new Date().toISOString() }]);
     } finally {
       setSuggestionChatLoading(false);
     }
@@ -483,43 +898,54 @@ export default function App() {
     return JSON.parse(response.text || "{}");
   };
 
-  const runBridgeDetector = async (records: any[]) => {
+  const runStructuralAnalyst = async (records: any[], claim: string) => {
     const genAI = getGenAI();
     const response = await genAI.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `You are a structural analyst for the ODEN Research System. 
-      Perform a "Cross-Thread Bridge Record Scan" on the following evidence records.
-      Each record belongs to an independent research thread (sub-claim).
+      contents: `You are a Senior Structural Analyst for the ODEN Research System. 
+      Perform a "Cross-Thread Structural Analysis" on the following evidence records for the claim: "${claim}".
       
-      CONNECTION LOGIC:
-      - VERIFIED records connect to other records through documented relationships: shared sources, shared institutions, shared date ranges, or direct personnel overlap.
-      - GAP records connect to the central claim through the institutional logic that requires them. 
-      - Connections between a GAP record and any other record should be treated as UNCONFIRMED until independent verification establishes it.
+      Your goal is to apply a consistent investigative method across historical, institutional, financial, social, and digital domains.
       
-      Identify entities (people, institutions, locations) that appear across multiple independent threads.
-      These are "Bridge Records" that suggest a structural nexus.
+      ANALYSIS GOALS:
+      1. Identify "Bridge Records": Entities (people, institutions, locations) that appear across multiple independent threads.
+      2. Identify "Evidence Conflicts": Contradictory data points that require resolution.
+      3. Identify "Institutional Gaps": Systemic absences in record groups that should exist based on institutional process.
+      4. Identify "Structural Anomalies": Deviations from standard institutional, financial, or social logic.
+      5. Identify "Pattern Recognition": Recurring structural signatures across different domains.
+      6. Identify "Risk Assessment": Methodological risks and potential biases in the current findings.
+      7. Identify "Key Actors": Central figures, organizations, or systems identified across the research.
+      8. Identify "Methodological Advice": Specific, actionable advice for the next phase of research.
+      9. Identify "Research Areas": New institutional or data domains suggested by the structural nexus.
+      10. Identify "Crossovers": Specific points where different domains (e.g., financial activity ↔ policy decisions) intersect.
+      
+      For each conclusion, provide detailed reasoning:
+      - What information was observed?
+      - What connects these pieces?
+      - Why is the connection meaningful?
+      - What does it suggest (without overstating certainty)?
+      - What is still missing?
+      
+      Distinguish between Strong Signals, Weak Signals, and Noise.
       
       Records: ${JSON.stringify(records)}
       
-      Output ONLY valid JSON: { 
-        "bridge_candidates": [{ "entity": string, "appears_in": string[], "confidence": number }],
-        "links": [{ "source": string, "target": string, "label": string }]
-      }.`,
+      Output ONLY valid JSON matching the schema.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            bridge_candidates: {
+            bridges: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  entity: { type: Type.STRING },
-                  appears_in: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  confidence: { type: Type.NUMBER },
+                  label: { type: Type.STRING },
+                  reason: { type: Type.STRING },
+                  records: { type: Type.ARRAY, items: { type: Type.STRING } },
                 },
-                required: ["entity", "appears_in", "confidence"],
+                required: ["label", "reason", "records"],
               },
             },
             links: {
@@ -534,8 +960,142 @@ export default function App() {
                 required: ["source", "target", "label"],
               },
             },
+            conflicts: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  resolution: { type: Type.STRING },
+                },
+                required: ["title", "description", "resolution"],
+              },
+            },
+            institutionalGaps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  label: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["label", "description"],
+              },
+            },
+            structuralAnomalies: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["title", "description"],
+              },
+            },
+            patternRecognition: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["title", "description"],
+              },
+            },
+            riskAssessment: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  risk: { type: Type.STRING },
+                  mitigation: { type: Type.STRING },
+                },
+                required: ["title", "risk", "mitigation"],
+              },
+            },
+            keyActors: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  role: { type: Type.STRING },
+                  significance: { type: Type.STRING },
+                },
+                required: ["name", "role", "significance"],
+              },
+            },
+            methodologicalAdvice: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  advice: { type: Type.STRING },
+                },
+                required: ["title", "advice"],
+              },
+            },
+            researchAreas: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                },
+                required: ["title", "description", "priority"],
+              },
+            },
+            crossovers: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  significance: { type: Type.STRING },
+                },
+                required: ["title", "description", "significance"],
+              },
+            },
+            entities: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  relevance: { type: Type.STRING },
+                },
+                required: ["name", "type", "relevance"],
+              },
+            },
+            anomalies: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  impact: { type: Type.STRING },
+                },
+                required: ["title", "description", "impact"],
+              },
+            },
+            summary: { type: Type.STRING },
           },
-          required: ["bridge_candidates", "links"],
+          required: [
+            "bridges", "links", "conflicts", "institutionalGaps", 
+            "structuralAnomalies", "patternRecognition", "riskAssessment", 
+            "keyActors", "methodologicalAdvice", "researchAreas", 
+            "crossovers", "entities", "anomalies", "summary"
+          ],
         },
       },
     });
@@ -580,8 +1140,16 @@ export default function App() {
       record_id: `manual-${Date.now()}`,
       record_type: 'Person',
       status: 'unverified',
+      classification: 'unverified',
       label: 'New Evidence Record',
       description: 'Manually added record.',
+      observed_content: '',
+      connection_logic: '',
+      significance: '',
+      impact: 'Leaves Open',
+      strength: 'Noise',
+      suggestions: '',
+      missing_verification: '',
       citation: '',
       citation_url: '',
       citation_type: 'none',
@@ -592,8 +1160,7 @@ export default function App() {
         original_claim: claim || 'Manual Investigation',
         sub_claims: [],
         results: [newRecord], 
-        links: [],
-        bridges: { bridge_candidates: [] }
+        bridges: []
       };
       return { ...prev, results: [...prev.results, newRecord] };
     });
@@ -602,7 +1169,7 @@ export default function App() {
 
   const deleteRecord = (recordId: string) => {
     if (!data) return;
-    const newResults = data.results.filter(n => n.record_id !== recordId);
+    const newResults = (data?.results || []).filter(n => n.record_id !== recordId);
     setData({ ...data, results: newResults });
     setSelectedRecord(null);
     setEditingRecord(null);
@@ -671,7 +1238,15 @@ export default function App() {
           label: r.label,
           description: r.description,
           status: r.status || 'verified',
+          classification: r.classification || 'verified',
           record_type: r.type || 'Document',
+          observed_content: r.observed_content || '',
+          connection_logic: r.connection_logic || '',
+          significance: r.significance || '',
+          impact: r.impact || 'leaves_open',
+          strength: r.strength || 5,
+          suggestions: r.suggestions || '',
+          missing_verification: r.missing_verification || '',
           citation: r.citations?.join(', ') || `Uploaded: ${fileName}`,
           citation_url: r.urls?.[0] || '',
           entities: r.entities || [],
@@ -684,8 +1259,7 @@ export default function App() {
             original_claim: 'Document Analysis',
             sub_claims: [],
             results: newRecords, 
-            bridges: { bridge_candidates: [] },
-            links: []
+            bridges: []
           };
           return {
             ...prev,
@@ -695,20 +1269,26 @@ export default function App() {
       }
 
       if (result.investigationPoints) {
-        const newPoints = result.investigationPoints.map((p: any) => ({
+        const newPoints: InvestigationItem[] = result.investigationPoints.map((p: any) => ({
           ...p,
           id: Math.random().toString(36).substr(2, 9),
           status: 'Pending',
+          explanation: p.explanation || '',
+          connection_to_pattern: p.connection_to_pattern || '',
+          verification_needs: p.verification_needs || '',
+          supporting_sources: p.supporting_sources || [],
           createdAt: timestamp
         }));
         setResearchPoints(prev => [...newPoints, ...prev]);
       }
 
       if (result.requests) {
-        const newReqs = result.requests.map((r: any) => ({
+        const newReqs: Request[] = result.requests.map((r: any) => ({
           ...r,
           id: Math.random().toString(36).substr(2, 9),
           status: 'Draft',
+          institution_normalized: r.institution_normalized || r.recipient,
+          fingerprint: Math.random().toString(36).substr(2, 15),
           createdAt: timestamp
         }));
         setRequests(prev => [...newReqs, ...prev]);
@@ -743,6 +1323,10 @@ export default function App() {
           title: `Uploaded: ${file.name}`,
           url: 'Local File',
           type: 'Upload',
+          classification: 'User Upload',
+          institution_normalized: 'Internal',
+          department: 'User Uploads',
+          physical_location: 'Local Storage',
           addedAt: new Date().toISOString(),
           notes: `User uploaded file: ${file.name}`,
           content: content
@@ -796,12 +1380,23 @@ export default function App() {
             record_id: r.item_id,
             record_type: r.source_type === 'primary' ? 'Document' : 'Event',
             status: c?.status || "incomplete", 
+            classification: c?.classification || "unverified",
             label: c?.label || r.description,
             description: c?.description || r.research_preview,
+            observed_content: c?.observed_content || '',
+            connection_logic: c?.connection_logic || '',
+            significance: c?.significance || '',
+            impact: c?.impact || 'leaves_open',
+            strength: c?.strength || 5,
+            suggestions: c?.suggestions || '',
+            missing_verification: c?.missing_verification || '',
             citation: r.citation,
             citation_url: r.citation_url,
             citation_type: r.source_type || 'none',
             gap_reasoning: c?.gap_reasoning,
+            entities: r.entities || [],
+            timeline_date: r.timeline_date || null,
+            institution_normalized: r.institution_normalized || '',
             weight: r.priority === 'high' ? 3 : r.priority === 'medium' ? 2 : 1
           };
         });
@@ -810,8 +1405,8 @@ export default function App() {
       }
       
       setResearchStep(6);
-      // Phase 6: Global Bridge Detection (Cross-thread scan)
-      const bridges = await runBridgeDetector(allClassifiedCards);
+      // Phase 6: Structural Analysis (Cross-thread scan)
+      const structuralAnalysis = await runStructuralAnalyst(allClassifiedCards, claim);
 
       // Update Investigation Log with new findings
       const newInvestigationItems: InvestigationItem[] = allClassifiedCards
@@ -822,6 +1417,10 @@ export default function App() {
           type: n.record_type === 'Document' ? 'Record Group' : 'Other',
           status: 'Pending',
           priority: n.weight === 3 ? 'High' : n.weight === 2 ? 'Medium' : 'Low',
+          explanation: n.description,
+          connection_to_pattern: 'Identified during structural analysis.',
+          verification_needs: n.missing_verification || 'Requires primary source verification.',
+          supporting_sources: n.citation ? [n.citation] : [],
           notes: n.description,
           searchQuery: `Investigate ${n.label}`,
           createdAt: new Date().toISOString()
@@ -830,35 +1429,36 @@ export default function App() {
       setResearchPoints(prev => [...newInvestigationItems, ...prev]);
       
       setSuggestions({
-        bridges: bridges.bridge_candidates.map((b: any) => ({
-          label: b.entity,
-          reason: `Potential bridge entity appearing in ${b.appears_in.length} threads.`,
-          records: b.appears_in
-        })),
-        gaps: allClassifiedCards.filter(n => n.status === 'gap').map(n => ({
-          label: n.label,
-          description: n.gap_reasoning?.why_should_exist || n.description
-        })),
-        researchAreas: [],
-        crossovers: [],
-        entities: [],
-        anomalies: [],
-        conflicts: [],
-        keyActors: [],
-        methodologicalAdvice: [],
-        institutionalGaps: [],
-        structuralAnomalies: [],
-        patternRecognition: [],
-        riskAssessment: []
+        bridges: structuralAnalysis.bridges || [],
+        gaps: [
+          ...allClassifiedCards.filter(n => n.status === 'gap').map(n => ({
+            label: n.label,
+            description: n.gap_reasoning?.why_should_exist || n.description
+          })),
+          ...(structuralAnalysis.institutionalGaps || [])
+        ],
+        researchAreas: structuralAnalysis.researchAreas || [],
+        crossovers: structuralAnalysis.crossovers || [],
+        entities: structuralAnalysis.entities || [],
+        anomalies: structuralAnalysis.anomalies || [],
+        conflicts: structuralAnalysis.conflicts || [],
+        keyActors: structuralAnalysis.keyActors || [],
+        methodologicalAdvice: structuralAnalysis.methodologicalAdvice || [],
+        institutionalGaps: structuralAnalysis.institutionalGaps || [],
+        structuralAnomalies: structuralAnalysis.structuralAnomalies || [],
+        patternRecognition: structuralAnalysis.patternRecognition || [],
+        riskAssessment: structuralAnalysis.riskAssessment || [],
+        summary: structuralAnalysis.summary || ''
       });
       
       setData({
         original_claim: claim,
         sub_claims: subClaims,
         results: allClassifiedCards,
-        bridges,
-        links: bridges.links || []
-      });
+        bridges: structuralAnalysis.bridges || [],
+        summary: structuralAnalysis.summary || '',
+        links: []
+      } as ResearchResponse);
       setActiveTab('dossier');
     } catch (err: any) {
       console.error("Research Error:", err);
@@ -887,83 +1487,111 @@ export default function App() {
         : '';
 
       const dataContext = data 
-        ? `CURRENT RESEARCH DATA (PIPELINE RESULTS):\n${JSON.stringify(data?.results?.map(n => ({ id: n.record_id, label: n.label, status: n.status, description: n.description })) || []).slice(0, 2000)}\n\n`
+        ? `CURRENT EVIDENCE DOSSIER:\n${JSON.stringify(data?.results?.map(n => ({ 
+            id: n.record_id, 
+            label: n.label, 
+            status: n.status, 
+            impact: n.impact,
+            strength: n.strength,
+            institution: n.institution_normalized,
+            description: n.description 
+          })) || []).slice(0, 3000)}\n\n`
         : '';
       
       const sourcesContext = sources.length > 0
-        ? `CURRENT SOURCES:\n${sources.map(s => `${s.title} (${s.type})`).join(', ')}\n\n`
+        ? `CURRENT SOURCES:\n${sources.map(s => `${s.title} (${s.type}) - ${s.institution_normalized}`).join(', ')}\n\n`
         : '';
       
       const investigationContext = researchPoints.length > 0
-        ? `CURRENT INVESTIGATION LOG:\n${researchPoints.map(p => `${p.name} [${p.status}]`).join(', ')}\n\n`
+        ? `CURRENT INVESTIGATION LOG:\n${researchPoints.map(p => `${p.name} [${p.status}] - ${p.explanation}`).join('\n')}\n\n`
+        : '';
+
+      const requestsContext = requests.length > 0
+        ? `CURRENT ARCHIVE/FOIA REQUESTS:\n${requests.map(r => `ID: ${r.id} | ${r.title} to ${r.institution_normalized} (${r.status}) | Fingerprint: ${r.fingerprint}`).join('\n')}\n\n`
         : '';
 
       const response = await genAI.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [
-          { parts: [{ text: `CONTEXT:\n${filesContext}${dataContext}${sourcesContext}${investigationContext}${historyContext}\n\nCURRENT INQUIRY: ${userMsg}` }] }
+          { parts: [{ text: `CONTEXT:\n${filesContext}${dataContext}${sourcesContext}${investigationContext}${requestsContext}${historyContext}\n\nCURRENT INQUIRY: ${userMsg}` }] }
         ],
         config: {
-          systemInstruction: `You are a knowledgeable ODEN Research Collaborator. Your goal is to partner with the user to investigate claims using a strict methodological approach.
+          systemInstruction: `You are the ODEN Structural Intelligence Engine. Your goal is to apply a consistent investigative method across historical, institutional, financial, and social domains.
           
-          YOUR PERSONA:
-          - You are a peer researcher. Engage in natural back-and-forth conversation.
-          - You have access to the current state of the research (evidence records, sources, investigation log, uploaded documents).
-          - You can answer questions, discuss historical or institutional context, and brainstorm research paths.
-          - Use the term "record" instead of "card" or "node".
+          CORE METHODOLOGY:
+          1. REASONING DEPTH (MANDATORY): For every conclusion or claim, you MUST break down:
+             - OBSERVED: What raw data or record was seen.
+             - CONNECTION: What structural link connects these pieces.
+             - SIGNIFICANCE: Why this is meaningful to the investigation.
+             - GAPS: What is still missing or needs verification.
+             This reasoning MUST be provided in the 'reasoning' field of your JSON response.
+          2. REAL LINKS & CITATIONS: You MUST provide real source links for your claims. Use the 'googleSearch' tool to find official archive pages, repository links, or direct record URLs. Populate the 'citations' array with these findings.
+          3. SIGNAL VS NOISE: Prioritize "Strong Signals" (direct records) over "Contextual Noise" (indirect indicators).
+          4. INSTITUTIONAL NORMALIZATION: Always use canonical names (e.g., "NARA" becomes "National Archives and Records Administration").
+          5. NO GUESSING: If a destination or email is unknown, state that you are searching for the most likely office based on institutional process. Do not hallucinate specific people.
           
-          METHODOLOGICAL CONSTRAINTS:
-          1. PRIMARY SOURCES ONLY: Always steer the conversation toward finding original records.
-          2. NO INFERENCE: Clearly distinguish between documented facts and research hypotheses.
-          3. RECOGNIZE ENTITIES: Actively identify people, organizations, agencies, departments, locations, and dates in the user's input and the research data.
-          4. ANALYZE UPLOADS: If the user has uploaded documents, analyze them thoroughly and reference their content in your responses.
-          5. SITE RESEARCH: Look at the research already on the site (the evidence records and sources) and talk about it.
+          STATE MANAGEMENT & DEDUPLICATION:
+          - DO NOT create duplicate logs, records, or requests.
+          - If a new finding overlaps with an existing item, use 'update_status', 'update_request', or 'update_evidence'.
+          - MERGE archive requests going to the same institution/department. Preserve distinct record targets inside the merged request.
+          - ARCHIVAL GAPS: If a record *should* exist but is missing, create a 'gap' record in the dossier and a corresponding investigation log.
           
-          INTERNET ACCESS:
-          - Use Google Search to verify facts and find archival links.
+          EVIDENCE DOSSIER FIELDS:
+          - 'observed_content': What the source actually contains.
+          - 'why_it_matters': Why this is a meaningful piece of evidence.
+          - 'impact': Supports, Weakens, Complicates, or Leaves Open.
+          - 'strength': Strong, Weak, or Noise.
+          - 'gap_reasoning': For gaps, explain why it should exist and the specific institutional process.
           
-          BEHAVIOR:
-          - If the user mentions an entity or a gap that needs following up, include it in 'suggestedResearchPoints'.
-          - ALWAYS offer to add investigation points to the log if you identify a new research path.
-          - If a specific archival or FOIA request is needed, generate it in 'generatedRequest'.
-          - For archival requests, use the same formal, institutional tone as FOIA requests, specifying the archive (e.g., NARA, Library of Congress) and record group if known.
+          INVESTIGATION LOG FIELDS:
+          - 'inference_type': 'Direct' (from record) or 'Inferred' (structural deduction).
+          - 'connection_to_pattern': How this entry links to the broader investigation.
+          - 'verification_needs': What specifically needs to be confirmed.
           
-          Output ONLY valid JSON matching the schema.`,
+          ACTIONS:
+          - 'add_log': New investigation point.
+          - 'add_evidence': New record for the Dossier.
+          - 'add_request': New FOIA/Archival request.
+          - 'update_request': Modify an existing request (e.g., add new targets to 'body').
+          - 'update_evidence': Modify an existing dossier record.
+          - 'update_status': Change status of a log or request.
+          
+          TONE: Confident, investigative, natural. No robotic disclaimers. Show the path you took to get there.`,
           tools: [{ googleSearch: {} }],
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              response: { type: Type.STRING },
+              response: { type: Type.STRING, description: "Your natural language response, including inline Markdown links." },
+              reasoning: { type: Type.STRING, description: "Detailed breakdown of OBSERVED, CONNECTION, SIGNIFICANCE, and GAPS." },
               entities: { type: Type.ARRAY, items: { type: Type.STRING } },
-              suggestedResearchPoints: {
+              citations: {
                 type: Type.ARRAY,
                 items: {
                   type: Type.OBJECT,
                   properties: {
-                    name: { type: Type.STRING },
-                    type: { type: Type.STRING, enum: ["Institution", "Person", "Location", "Record Group", "Other"] },
-                    priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
-                    notes: { type: Type.STRING },
-                    searchQuery: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    url: { type: Type.STRING },
+                    institution: { type: Type.STRING }
                   },
-                  required: ["name", "type", "priority", "notes", "searchQuery"],
+                  required: ["title", "url"]
+                },
+                description: "List of real source links supporting your response."
+              },
+              actions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    type: { type: Type.STRING, enum: ["add_log", "add_evidence", "add_request", "update_request", "update_evidence", "update_status"] },
+                    data: { type: Type.OBJECT },
+                  },
+                  required: ["type", "data"],
                 },
                 nullable: true,
-              },
-              generatedRequest: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING },
-                  recipient: { type: Type.STRING },
-                  subject: { type: Type.STRING },
-                  body: { type: Type.STRING },
-                  type: { type: Type.STRING, enum: ["FOIA", "Archival", "Institutional"] },
-                },
-                nullable: true,
-              },
+              }
             },
-            required: ["response", "entities"],
+            required: ["response", "entities", "reasoning"],
           },
         },
       });
@@ -971,43 +1599,84 @@ export default function App() {
       const result = JSON.parse(response.text || "{}");
       const aiTimestamp = new Date().toISOString();
       
-      // Handle suggested research points
-      if (result.suggestedResearchPoints && result.suggestedResearchPoints.length > 0) {
-        const newPoints = result.suggestedResearchPoints.map((p: any) => ({
-          ...p,
-          id: Math.random().toString(36).substr(2, 9),
-          status: 'Pending',
-          createdAt: aiTimestamp
-        }));
-        setResearchPoints(prev => [...newPoints, ...prev]);
+      // Handle actions
+      if (result.actions && result.actions.length > 0) {
+        result.actions.forEach((action: any) => {
+          if (action.type === 'add_log') {
+            const newPoint: InvestigationItem = {
+              ...action.data,
+              id: Math.random().toString(36).substr(2, 9),
+              status: 'Pending',
+              createdAt: aiTimestamp
+            };
+            setResearchPoints(prev => [newPoint, ...prev]);
+          } else if (action.type === 'add_evidence') {
+            const newEvidence: EvidenceRecord = {
+              ...action.data,
+              record_id: Math.random().toString(36).substr(2, 9),
+              status: action.data.status || 'unverified',
+              citation_type: action.data.citation_type || 'none',
+              weight: action.data.weight || 5,
+              impact: action.data.impact || 'Leaves Open',
+              strength: action.data.strength || 'Noise'
+            };
+            setData(prev => {
+              if (!prev) return { 
+                original_claim: claim || 'AI Suggested Research',
+                sub_claims: [],
+                results: [newEvidence], 
+                bridges: []
+              };
+              return { ...prev, results: [...prev.results, newEvidence] };
+            });
+          } else if (action.type === 'add_request') {
+            const newRequest: Request = {
+              ...action.data,
+              id: Math.random().toString(36).substr(2, 9),
+              status: 'Draft',
+              createdAt: aiTimestamp,
+              fingerprint: generateFingerprint(action.data.institution_normalized || '', action.data.department || '', action.data.subject || '')
+            };
+            addRequest(newRequest);
+          } else if (action.type === 'update_request') {
+            const { id, body, status } = action.data;
+            setRequests(prev => prev.map(r => r.id === id ? { 
+              ...r, 
+              body: r.body.includes(body) ? r.body : `${r.body}\n\n--- AI MERGED UPDATE ---\n${body}`,
+              status: status || r.status 
+            } : r));
+          } else if (action.type === 'update_evidence') {
+            const updatedRecord = action.data;
+            setData(prev => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                results: prev.results.map(n => n.record_id === updatedRecord.record_id ? { ...n, ...updatedRecord } : n)
+              };
+            });
+          } else if (action.type === 'update_status') {
+            const { id, status, type } = action.data;
+            if (type === 'log') {
+              setResearchPoints(prev => prev.map(p => p.id === id ? { ...p, status } : p));
+            } else if (type === 'request') {
+              setRequests(prev => prev.map(r => r.id === id ? { ...r, status } : r));
+            }
+          }
+        });
       }
 
-      // Check if the AI generated a request
-      if (result.generatedRequest) {
-        const newReq: Request = {
-          ...result.generatedRequest,
-          id: Math.random().toString(36).substr(2, 9),
-          status: 'Draft',
-          createdAt: aiTimestamp
-        };
-        setRequests(prev => [newReq, ...prev]);
-        setChatMessages(prev => [...prev, { 
-          role: 'ai', 
-          content: `${result.response}\n\n[SYSTEM: A new ${newReq.type} request and ${result.suggestedResearchPoints?.length || 0} research points have been generated.]`,
-          timestamp: aiTimestamp,
-          entities: result.entities
-        }]);
-      } else {
-        setChatMessages(prev => [...prev, { 
-          role: 'ai', 
-          content: result.response, 
-          timestamp: aiTimestamp,
-          entities: result.entities
-        }]);
-      }
+      setChatMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: result.response, 
+        reasoning: result.reasoning,
+        entities: result.entities,
+        timestamp: aiTimestamp,
+        citations: result.citations,
+        actions: result.actions
+      }]);
     } catch (err: any) {
       console.error("Chat Error:", err);
-      setChatMessages(prev => [...prev, { role: 'ai', content: `Error: ${err.message}`, timestamp: new Date().toISOString() }]);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}`, timestamp: new Date().toISOString() }]);
       reportError(err.message);
     } finally {
       setChatLoading(false);
@@ -1024,12 +1693,14 @@ export default function App() {
   };
 
   const addRequest = (newRequest: Request) => {
-    setRequests(prev => [newRequest, ...prev]);
+    const normalizedInst = normalizeInstitution(newRequest.institution_normalized || '');
+    const fingerprint = generateFingerprint(normalizedInst, newRequest.department, newRequest.subject);
+    setRequests(prev => [{ ...newRequest, institution_normalized: normalizedInst, fingerprint }, ...prev]);
     setEditingRequest(null);
   };
 
   const deleteRequest = (id: string) => {
-    setRequests(prev => prev.filter(r => r.id !== id));
+    setRequests(prev => (prev || []).filter(r => r.id !== id));
   };
 
   const saveRequest = (req: Request) => {
@@ -1057,7 +1728,7 @@ export default function App() {
   };
 
   const deleteSource = (id: string) => {
-    setSources(prev => prev.filter(s => s.id !== id));
+    setSources(prev => (prev || []).filter(s => s.id !== id));
   };
 
   const saveResearchPoint = (point: InvestigationItem) => {
@@ -1070,7 +1741,7 @@ export default function App() {
   };
 
   const deleteResearchPoint = (id: string) => {
-    setResearchPoints(prev => prev.filter(p => p.id !== id));
+    setResearchPoints(prev => (prev || []).filter(p => p.id !== id));
   };
 
   const exportData = () => {
@@ -1113,16 +1784,34 @@ export default function App() {
   };
 
   const clearSession = () => {
-    if (window.confirm("Are you sure you want to clear all research data? This cannot be undone.")) {
-      setData(null);
-      setChatMessages([]);
-      setRequests([]);
-      setSources([]);
-      setResearchPoints([]);
-      setClaim('');
-      localStorage.removeItem('oden_session');
-      setActiveTab('guide');
-    }
+    setShowClearConfirm(true);
+  };
+
+  const handleClearSession = () => {
+    setData(null);
+    setChatMessages([]);
+    setRequests([]);
+    setSources([]);
+    setResearchPoints([]);
+    setClaim('');
+    setSuggestions({ 
+      bridges: [], 
+      gaps: [], 
+      researchAreas: [], 
+      crossovers: [], 
+      entities: [], 
+      anomalies: [], 
+      conflicts: [], 
+      keyActors: [], 
+      methodologicalAdvice: [],
+      institutionalGaps: [],
+      structuralAnomalies: [],
+      patternRecognition: [],
+      riskAssessment: []
+    });
+    localStorage.removeItem('oden_session');
+    setActiveTab('guide');
+    setShowClearConfirm(false);
   };
 
   return (
@@ -1144,7 +1833,8 @@ export default function App() {
               <option value="chat">05 Chat</option>
               <option value="requests">06 Requests</option>
               <option value="suggestions">07 Suggestions</option>
-              <option value="document-sync">08 Document Sync</option>
+              <option value="sources">08 Sources</option>
+              <option value="data-management">09 Data Management</option>
             </select>
           </div>
           <div className="hidden md:block">
@@ -1186,6 +1876,12 @@ export default function App() {
             >
               04 Log
             </button>
+            <button 
+              onClick={() => setActiveTab('sources')}
+              className={cn("pb-1 border-b-2 transition-all", activeTab === 'sources' ? "border-black opacity-100" : "border-transparent opacity-30 hover:opacity-100")}
+            >
+              05 Sources
+            </button>
           </nav>
 
           <div className="h-4 w-[1px] bg-black/10 mx-2" />
@@ -1201,9 +1897,9 @@ export default function App() {
                 {[
                   { id: 'chat', label: 'Research Chat', icon: Send },
                   { id: 'requests', label: 'FOIA Requests', icon: Mail },
-                  { id: 'investigation', label: 'Investigation Log', icon: Network },
                   { id: 'suggestions', label: 'AI Suggestions', icon: Sparkles },
-                  { id: 'document-sync', label: 'Document Sync', icon: Save },
+                  { id: 'sources', label: 'Evidence Sources', icon: BookOpen },
+                  { id: 'data-management', label: 'Data Management', icon: Save },
                 ].map(item => (
                   <button
                     key={item.id}
@@ -1251,94 +1947,157 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="h-full overflow-y-auto bg-stone-50"
               >
-                <div className="max-w-5xl mx-auto p-8 md:p-16">
-                  <div className="border-b border-black pb-12 mb-16">
-                    <h2 className="text-5xl md:text-7xl font-serif italic mb-6 tracking-tight">How to use ODEN.</h2>
+                <div className="max-w-6xl mx-auto p-8 md:p-16">
+                  <div className="border-b border-black pb-12 mb-24">
+                    <h2 className="text-5xl md:text-7xl font-serif italic mb-6 tracking-tight">Welcome to ODEN.</h2>
                     <p className="text-lg md:text-xl font-serif italic opacity-60 max-w-2xl leading-relaxed">
-                      ODEN is a diagnostic research engine built to strip narrative bias and reveal the structural evidence required to verify or falsify institutional claims.
+                      ODEN is a research tool designed to help you investigate complex claims by stripping away narrative bias and focusing on structural evidence.
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
-                    <section className="space-y-8">
-                      <div>
-                        <h3 className="col-header mb-6">01 The Pipeline</h3>
-                        <p className="text-sm leading-relaxed mb-4">
-                          The Pipeline is your entry point. When you enter a claim, ODEN performs a multi-stage analysis:
-                        </p>
-                        <div className="space-y-4">
-                          <div className="p-4 border border-black bg-white">
-                            <p className="text-[10px] font-mono uppercase font-bold mb-1">Neutralization</p>
-                            <p className="text-xs opacity-60">Strips emotional framing to find the testable institutional fact.</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-20 gap-y-32 items-start">
+                    {/* Left Column */}
+                    <div className="space-y-32">
+                      <section>
+                        <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-40 mb-10">The Methodology</h3>
+                        <div className="space-y-12">
+                          <div className="flex gap-6">
+                            <div className="text-2xl font-serif italic opacity-20">01</div>
+                            <div>
+                              <h4 className="text-sm font-bold uppercase mb-2">Evidence First</h4>
+                              <p className="text-xs opacity-60 leading-relaxed">
+                                ODEN is built on the principle that <span className="font-bold underline italic">records</span> are the only reliable source of truth. Instead of chasing narratives, we map the institutional framework through which records are created, stored, and sometimes hidden.
+                              </p>
+                            </div>
                           </div>
-                          <div className="p-4 border border-black bg-white">
-                            <p className="text-[10px] font-mono uppercase font-bold mb-1">Blueprint Generation</p>
-                            <p className="text-xs opacity-60">Deduces which record groups *must* exist if the claim is true.</p>
+                          <div className="flex gap-6">
+                            <div className="text-2xl font-serif italic opacity-20">02</div>
+                            <div>
+                              <h4 className="text-sm font-bold uppercase mb-2">Identify Structural Gaps</h4>
+                              <p className="text-xs opacity-60 leading-relaxed">
+                                The most important evidence is often what is <span className="italic underline">missing</span>. If a protocol requires a memo to be signed, but the memo is absent, that is a "Gap". ODEN helps you predict and log these gaps to generate targeted FOIA requests.
+                              </p>
+                            </div>
                           </div>
-                          <div className="p-4 border border-black bg-white">
-                            <p className="text-[10px] font-mono uppercase font-bold mb-1">Primary Research</p>
-                            <p className="text-xs opacity-60">Scans archives and digital repositories for those specific records.</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <h3 className="col-header mb-6">02 Evidence Classification</h3>
-                        <p className="text-sm leading-relaxed mb-4">
-                          Every finding is classified into one of four structural states:
-                        </p>
-                        <div className="grid grid-cols-1 gap-2">
-                          <div className="flex items-center gap-3 p-3 border border-black bg-green-50">
-                            <div className="w-2 h-2 bg-green-600 rounded-full" />
-                            <span className="text-[10px] font-mono uppercase font-bold">Verified</span>
-                            <span className="text-[10px] opacity-60">— Confirmed by primary source.</span>
-                          </div>
-                          <div className="flex items-center gap-3 p-3 border border-black bg-red-50">
-                            <div className="w-2 h-2 bg-red-600 rounded-full" />
-                            <span className="text-[10px] font-mono uppercase font-bold">Gap</span>
-                            <span className="text-[10px] opacity-60">— Record should exist but is missing.</span>
-                          </div>
-                          <div className="flex items-center gap-3 p-3 border border-black bg-purple-50">
-                            <div className="w-2 h-2 bg-purple-600 rounded-full" />
-                            <span className="text-[10px] font-mono uppercase font-bold">Contested</span>
-                            <span className="text-[10px] opacity-60">— Conflicting primary records.</span>
-                          </div>
-                          <div className="flex items-center gap-3 p-3 border border-black bg-yellow-50">
-                            <div className="w-2 h-2 bg-yellow-600 rounded-full" />
-                            <span className="text-[10px] font-mono uppercase font-bold">Unverified</span>
-                            <span className="text-[10px] opacity-60">— Secondary source only.</span>
+                          <div className="flex gap-6">
+                            <div className="text-2xl font-serif italic opacity-20">03</div>
+                            <div>
+                              <h4 className="text-sm font-bold uppercase mb-2">Bridge the Threads</h4>
+                              <p className="text-xs opacity-60 leading-relaxed">
+                                Use the AI Research Strategist to find "Structural Bridges"—recurring actors, shared protocols, or timeline anomalies that connect seemingly independent threads of investigation.
+                              </p>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </section>
+                      </section>
 
-                    <section className="space-y-8">
-                      <div>
-                        <h3 className="col-header mb-6">03 The Dossier</h3>
-                        <p className="text-sm leading-relaxed mb-4">
-                          The Dossier is your evidence workspace. Use it to:
+                      <section className="space-y-10">
+                        <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-40">Operational Guide — Part I</h3>
+                        <div className="space-y-10">
+                          {[
+                            { 
+                              id: 'pipeline', 
+                              label: '01 Pipeline', 
+                              title: 'The Evidence Entry Point',
+                              desc: 'Neutralize the narrative. Enter claims and watch ODEN break them down into researchable threads.',
+                              how: 'Input any complex claim or narrative. ODEN’s AI analyzes the text to extract specific entities, dates, and institutional actions, categorizing them into structural threads (e.g., Financials, Personnel) for systematic investigation.'
+                            },
+                            { 
+                              id: 'chat', 
+                              label: '03 Strategist', 
+                              title: 'AI Research Partner',
+                              desc: 'Talk to the AI about your research. Ask for summaries, source suggestions, or deep structural analysis.',
+                              how: 'Use the chat to query your current workspace. The Strategist can help you identify institutional patterns, summarize long uploads, or suggest specific archives to search based on the records you’ve already logged.'
+                            },
+                            { 
+                              id: 'dossier', 
+                              label: '05 Dossier', 
+                              title: 'The Master Network',
+                              desc: 'Your master repository. Organize records into a network to see how they connect.',
+                              how: 'The Dossier is where your verified evidence lives. View records as a list or a network graph to visualize the structural blueprint of the system you are investigating. Every connection here represents a verified link.'
+                            },
+                            { 
+                              id: 'data-management', 
+                              label: '07 Management', 
+                              title: 'Session & Data Control',
+                              desc: 'Sync documents, export your session, or clear local data.',
+                              how: 'ODEN is a local-first tool. Use this tab to export your entire investigation as a JSON file for backup or sharing. You can also re-import previous sessions or clear your local cache to start fresh.'
+                            }
+                          ].map(tab => (
+                            <button 
+                              key={tab.id}
+                              onClick={() => setActiveTab(tab.id as any)}
+                              className="w-full p-8 border border-black bg-white hover:bg-stone-100 transition-all text-left group shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[3px] hover:translate-y-[3px] flex flex-col"
+                            >
+                              <div className="flex justify-between items-center mb-3">
+                                <h4 className="text-[10px] font-mono uppercase font-bold tracking-widest">{tab.label} — {tab.title}</h4>
+                                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all" />
+                              </div>
+                              <p className="text-sm font-serif italic mb-6">{tab.desc}</p>
+                              <div className="pt-6 border-t border-black/10 mt-auto">
+                                <p className="text-[10px] font-mono uppercase opacity-40 mb-2 tracking-tighter">How it works:</p>
+                                <p className="text-[11px] leading-relaxed opacity-70">{tab.how}</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
+
+                    {/* Right Column */}
+                    <div className="space-y-32 md:mt-64">
+                      <div className="p-10 bg-black text-white border border-black shadow-[10px_10px_0px_0px_rgba(0,0,0,0.2)]">
+                        <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-6">Pro Tip: The Power of Gaps</h3>
+                        <p className="text-base font-serif italic leading-relaxed">
+                          "In investigative research, what's not there is often as telling as what is. If you know a meeting happened but there are no minutes, that is an Archival Gap. Logging these gaps allows you to generate targeted FOIA or Archival Requests in the Requests tab."
                         </p>
-                        <ul className="text-xs space-y-3 font-mono uppercase opacity-70">
-                          <li className="flex gap-3"><ChevronRight className="w-3 h-3 flex-shrink-0" /> Inspect individual evidence records</li>
-                          <li className="flex gap-3"><ChevronRight className="w-3 h-3 flex-shrink-0" /> Identify "Bridges" (entities appearing in multiple threads)</li>
-                          <li className="flex gap-3"><ChevronRight className="w-3 h-3 flex-shrink-0" /> Manually add your own research findings</li>
-                          <li className="flex gap-3"><ChevronRight className="w-3 h-3 flex-shrink-0" /> Deep-dive into specific records with the AI</li>
-                        </ul>
                       </div>
 
-                      <div className="p-8 border border-black bg-stone-900 text-white">
-                        <h4 className="text-xl font-serif italic mb-4">Pro Tip: Structural Gaps</h4>
-                        <p className="text-xs opacity-60 leading-relaxed mb-6">
-                          A "Gap" is more than just missing info. It is a methodological failure of an institution to produce a record that its own protocols require. Gaps are often more revealing than verified facts.
-                        </p>
-                        <button 
-                          onClick={() => setActiveTab('pipeline')}
-                          className="w-full py-4 border border-white/20 hover:bg-white hover:text-black transition-all text-[10px] font-mono uppercase font-bold tracking-widest"
-                        >
-                          Start Your First Research
-                        </button>
-                      </div>
-                    </section>
+                      <section className="space-y-10">
+                        <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-40">Operational Guide — Part II</h3>
+                        <div className="space-y-10">
+                          {[
+                            { 
+                              id: 'sources', 
+                              label: '02 Sources', 
+                              title: 'The Evidence Repository',
+                              desc: 'Your library. Manage all uploaded documents, PDFs, and external links here.',
+                              how: 'Upload primary documents or log external URLs. Every record in your Dossier should link back to a source here, ensuring a verifiable chain of evidence. Filter by "Primary" vs "Secondary" to maintain research integrity.'
+                            },
+                            { 
+                              id: 'suggestions', 
+                              label: '04 Suggestions', 
+                              title: 'Pattern Recognition',
+                              desc: 'Materialize records from AI-detected patterns, anomalies, and institutional gaps.',
+                              how: 'ODEN scans your Dossier for structural anomalies—like missing oversight steps or conflicting roles. "Materialize" these suggestions to turn AI-detected "Gaps" into active investigation targets.'
+                            },
+                            { 
+                              id: 'requests', 
+                              label: '06 Requests', 
+                              title: 'Actionable FOIA/Archival',
+                              desc: 'Draft and track FOIA or archival requests based on the gaps ODEN identifies.',
+                              how: 'Turn "Archival Gaps" into action. Draft formal requests for missing documents directly from your research findings. Track the status of each request to ensure no lead goes cold.'
+                            }
+                          ].map(tab => (
+                            <button 
+                              key={tab.id}
+                              onClick={() => setActiveTab(tab.id as any)}
+                              className="w-full p-8 border border-black bg-white hover:bg-stone-100 transition-all text-left group shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[3px] hover:translate-y-[3px] flex flex-col"
+                            >
+                              <div className="flex justify-between items-center mb-3">
+                                <h4 className="text-[10px] font-mono uppercase font-bold tracking-widest">{tab.label} — {tab.title}</h4>
+                                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all" />
+                              </div>
+                              <p className="text-sm font-serif italic mb-6">{tab.desc}</p>
+                              <div className="pt-6 border-t border-black/10 mt-auto">
+                                <p className="text-[10px] font-mono uppercase opacity-40 mb-2 tracking-tighter">How it works:</p>
+                                <p className="text-[11px] leading-relaxed opacity-70">{tab.how}</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -1451,20 +2210,73 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-16">
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 mb-16">
                       {[
-                        { step: "01", title: "Neutralizer", desc: "Strips emotional framing and political bias from the input claim.", icon: Shield },
-                        { step: "02", title: "Blueprint", desc: "Deduces the institutional records that *must* exist if the claim is true.", icon: Network },
-                        { step: "03", title: "Researcher", desc: "Scans primary archives, record groups, and digital repositories.", icon: Search },
-                        { step: "04", title: "Classifier", desc: "Applies the four-state evidence model: Verified, Gap, Contested, Unverified.", icon: FileText },
+                        { 
+                          step: "01", 
+                          title: "Neutralizer", 
+                          desc: "Strips emotional framing and political bias from the input claim to reveal the underlying structural proposition.", 
+                          context: "By removing rhetorical flourishes, we isolate the specific institutional actions that must have occurred for the claim to be true.",
+                          icon: Shield,
+                          span: "md:col-span-4"
+                        },
+                        { 
+                          step: "02", 
+                          title: "Blueprint", 
+                          desc: "Deduces the institutional records that *must* exist if the claim is structurally valid.", 
+                          context: "This phase maps out the 'paper trail'—financial records, communication logs, and archival entries—required for verification.",
+                          icon: Network,
+                          span: "md:col-span-4"
+                        },
+                        { 
+                          step: "03", 
+                          title: "Researcher", 
+                          desc: "Scans primary archives, record groups, and digital repositories for the deduced evidence.", 
+                          context: "The system targets specific record groups identified in the Blueprint phase, prioritizing primary sources over secondary accounts.",
+                          icon: Search,
+                          span: "md:col-span-4"
+                        },
+                        { 
+                          step: "04", 
+                          title: "Classifier", 
+                          desc: "Applies the four-state evidence model: Verified, Gap, Contested, or Unverified.", 
+                          context: "Each record is evaluated for authenticity and relevance, determining if it supports, contradicts, or represents a missing link.",
+                          icon: FileText,
+                          span: "md:col-span-6"
+                        },
+                        { 
+                          step: "05", 
+                          title: "Analyst", 
+                          desc: "Detects patterns, crossovers, and non-obvious coincidences across the gathered evidence.", 
+                          context: "This layer looks for recurring structural signatures and institutional anomalies that suggest deeper systemic patterns.",
+                          icon: Zap,
+                          span: "md:col-span-6"
+                        },
+                        { 
+                          step: "06", 
+                          title: "Bridge Detector", 
+                          desc: "Identifies structural nexus points where disparate research threads intersect.", 
+                          context: "Bridges represent critical connections between entities or events that were previously considered unrelated.",
+                          icon: LinkIcon,
+                          span: "md:col-span-6"
+                        },
+                        { 
+                          step: "07", 
+                          title: "Strategic Advisory", 
+                          desc: "Generates actionable research paths and risk assessments based on the current dossier.", 
+                          context: "The final stage provides a methodological roadmap for further investigation, highlighting critical gaps and potential conflicts.",
+                          icon: Compass,
+                          span: "md:col-span-6"
+                        },
                       ].map((item) => (
-                        <div key={item.step} className="p-6 border border-black bg-white hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all group">
+                        <div key={item.step} className={cn("p-6 border border-black bg-white hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all group", item.span)}>
                           <div className="flex justify-between items-start mb-4">
                             <span className="text-[10px] font-mono opacity-30">{item.step}</span>
                             <item.icon className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-all" />
                           </div>
                           <h4 className="font-serif italic text-xl mb-2">{item.title}</h4>
-                          <p className="text-[10px] font-mono uppercase opacity-60 leading-relaxed">{item.desc}</p>
+                          <p className="text-[10px] font-mono uppercase font-bold mb-2 tracking-tighter">{item.desc}</p>
+                          <p className="text-[10px] opacity-60 leading-relaxed">{item.context}</p>
                         </div>
                       ))}
                     </div>
@@ -1594,15 +2406,15 @@ export default function App() {
                       </div>
                       <div className="p-4 border border-black bg-white flex flex-col justify-between h-24 border-l-4 border-l-green-600">
                         <span className="text-[9px] font-mono uppercase opacity-50">Verified</span>
-                        <span className="text-3xl font-serif italic">{data?.results?.filter(n => n.status === 'verified').length || 0}</span>
+                        <span className="text-3xl font-serif italic">{data?.results?.filter(n => n.classification === 'verified' || n.status === 'verified').length || 0}</span>
                       </div>
                       <div className="p-4 border border-black bg-white flex flex-col justify-between h-24 border-l-4 border-l-red-600">
                         <span className="text-[9px] font-mono uppercase opacity-50">Archival Gaps</span>
-                        <span className="text-3xl font-serif italic">{data?.results?.filter(n => n.status === 'gap').length || 0}</span>
+                        <span className="text-3xl font-serif italic">{data?.results?.filter(n => n.classification === 'gap' || n.status === 'gap').length || 0}</span>
                       </div>
                       <div className="p-4 border border-black bg-white flex flex-col justify-between h-24 border-l-4 border-l-purple-600">
                         <span className="text-[9px] font-mono uppercase opacity-50">Contested</span>
-                        <span className="text-3xl font-serif italic">{data?.results?.filter(n => n.status === 'contested').length || 0}</span>
+                        <span className="text-3xl font-serif italic">{data?.results?.filter(n => n.classification === 'contested' || n.status === 'contested').length || 0}</span>
                       </div>
                       <div className="p-4 border border-black bg-white flex flex-col justify-between h-24 border-l-4 border-l-yellow-600">
                         <span className="text-[9px] font-mono uppercase opacity-50">Unverified</span>
@@ -1610,22 +2422,51 @@ export default function App() {
                       </div>
                     </div>
 
+                    <div className="flex flex-wrap gap-4 items-center justify-between border-t border-black pt-8">
+                      <div className="flex gap-2">
+                        {['all', 'verified', 'contested', 'gap'].map((f) => (
+                          <button
+                            key={f}
+                            onClick={() => setDossierFilter(f as any)}
+                            className={cn(
+                              "px-3 py-1 text-[10px] font-mono uppercase border border-black transition-all",
+                              dossierFilter === f ? "bg-black text-white" : "bg-white text-black hover:bg-black/5"
+                            )}
+                          >
+                            {f}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex gap-4 items-center">
+                        <span className="text-[10px] font-mono uppercase opacity-50">Sort By:</span>
+                        <select 
+                          value={dossierSort}
+                          onChange={(e) => setDossierSort(e.target.value as any)}
+                          className="bg-transparent border-b border-black text-[10px] font-mono uppercase focus:outline-none"
+                        >
+                          <option value="default">Default</option>
+                          <option value="strength">Signal Strength</option>
+                          <option value="impact">Impact</option>
+                        </select>
+                      </div>
+                    </div>
+
                     {/* Crossovers / Bridges Section */}
-                    {data?.bridges?.bridge_candidates && data.bridges.bridge_candidates.length > 0 && (
+                    {data?.bridges && data.bridges.length > 0 && (
                       <section>
                         <h3 className="col-header mb-6">Structural Crossovers (Bridges)</h3>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                          {data?.bridges?.bridge_candidates?.map(bridge => (
-                            <div key={bridge.entity} className="p-6 border border-black bg-stone-900 text-white space-y-4">
+                          {data?.bridges?.map(bridge => (
+                            <div key={bridge.label} className="p-6 border border-black bg-stone-900 text-white space-y-4">
                               <div className="flex justify-between items-start">
-                                <h4 className="font-serif italic text-xl">{bridge.entity}</h4>
+                                <h4 className="font-serif italic text-xl">{bridge.label}</h4>
                                 <span className="text-[8px] font-mono bg-white text-black px-2 py-0.5 uppercase font-bold">Bridge</span>
                               </div>
                               <p className="text-[10px] font-mono opacity-60 leading-relaxed">
-                                This entity appears in {bridge.appears_in.length} independent research threads, suggesting a structural nexus.
+                                {bridge.reason}
                               </p>
                               <div className="flex flex-wrap gap-1 pt-2">
-                                {bridge.appears_in.map(id => {
+                                {bridge.records.map(id => {
                                   const record = data?.results?.find(c => c.record_id === id);
                                   return (
                                     <button 
@@ -1692,7 +2533,20 @@ export default function App() {
                     <section>
                       <h3 className="col-header mb-6">Evidence Records</h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                        {data?.results?.map((record) => (
+                        {(data?.results || [])
+                          .filter(r => dossierFilter === 'all' || r.status === dossierFilter)
+                          .sort((a, b) => {
+                            if (dossierSort === 'strength') {
+                              const weights = { 'Strong': 3, 'Medium': 2, 'Weak': 1, 'Noise': 0 };
+                              return (weights[b.strength || 'Noise'] || 0) - (weights[a.strength || 'Noise'] || 0);
+                            }
+                            if (dossierSort === 'impact') {
+                              const weights = { 'Supports': 3, 'Complicates': 2, 'Leaves Open': 1, 'Weakens': 0 };
+                              return (weights[b.impact || 'Leaves Open'] || 0) - (weights[a.impact || 'Leaves Open'] || 0);
+                            }
+                            return 0;
+                          })
+                          .map((record) => (
                           <motion.div 
                             key={record.record_id}
                             layoutId={record.record_id}
@@ -1701,19 +2555,77 @@ export default function App() {
                               setIsSidebarOpen(true);
                             }}
                             className={cn(
-                              "group p-6 border border-black bg-white hover:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all cursor-pointer flex flex-col justify-between h-80",
-                              record.status === 'gap' && "border-red-600 border-2"
+                              "group p-6 border border-black bg-white hover:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all cursor-pointer flex flex-col justify-between min-h-[320px]",
+                              record.status === 'gap' && "border-red-600 border-2 bg-red-50/30"
                             )}
                           >
                             <div className="space-y-4">
                               <div className="flex justify-between items-start">
                                 <StatusBadge status={record.status} />
-                                <span className="text-[9px] font-mono uppercase opacity-40">{record.record_type}</span>
+                                <div className="flex flex-col items-end gap-1">
+                                  <span className="text-[9px] font-mono uppercase opacity-40">{record.record_type}</span>
+                                  {record.classification && (
+                                    <span className={cn(
+                                      "text-[7px] font-mono px-1 uppercase border",
+                                      record.classification === 'verified' ? "border-green-600 text-green-600" :
+                                      record.classification === 'contested' ? "border-red-600 text-red-600" :
+                                      "border-stone-400 text-stone-400"
+                                    )}>{record.classification}</span>
+                                  )}
+                                </div>
                               </div>
                               <h4 className="font-serif italic text-2xl leading-tight group-hover:underline">{record.label}</h4>
-                              <p className="text-xs opacity-60 line-clamp-4 font-serif italic leading-relaxed">
-                                {record.description}
-                              </p>
+                              
+                              {record.status === 'gap' ? (
+                                <div className="space-y-2">
+                                  <p className="text-[10px] font-mono uppercase text-red-600 font-bold">Archival Gap Detected</p>
+                                  <p className="text-xs opacity-80 font-serif italic leading-relaxed">
+                                    <span className="font-bold">Why expected:</span> {record.gap_reasoning?.why_should_exist}
+                                  </p>
+                                  <p className="text-xs opacity-80 font-serif italic leading-relaxed">
+                                    <span className="font-bold">Likely Location:</span> {record.gap_reasoning?.where_specifically}
+                                  </p>
+                                </div>
+                              ) : (
+                                <div className="space-y-3">
+                                  <div className="space-y-1">
+                                    <span className="text-[8px] font-mono uppercase opacity-40">Observed Content:</span>
+                                    <p className="text-xs opacity-60 line-clamp-3 font-serif italic leading-relaxed">
+                                      {record.observed_content || record.description}
+                                    </p>
+                                  </div>
+                                  {record.why_it_matters && (
+                                    <div className="space-y-1">
+                                      <span className="text-[8px] font-mono uppercase opacity-40">Significance:</span>
+                                      <p className="text-xs opacity-80 font-serif italic leading-relaxed">
+                                        {record.why_it_matters}
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="flex flex-wrap gap-2 items-center">
+                                {record.impact && (
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[8px] font-mono uppercase opacity-40">Impact:</span>
+                                    <span className={cn(
+                                      "text-[8px] font-mono px-1 uppercase border",
+                                      record.impact === 'Supports' ? "border-green-600 text-green-600" :
+                                      record.impact === 'Weakens' ? "border-red-600 text-red-600" :
+                                      "border-stone-400 text-stone-400"
+                                    )}>{record.impact}</span>
+                                  </div>
+                                )}
+                                {record.strength && (
+                                  <span className={cn(
+                                    "text-[8px] font-mono px-1 uppercase border",
+                                    record.strength === 'Strong' ? "border-black bg-black text-white" :
+                                    record.strength === 'Weak' ? "border-black/20 text-black/40" :
+                                    "border-dashed border-black/10 text-black/20"
+                                  )}>{record.strength} Signal</span>
+                                )}
+                              </div>
                             </div>
                             
                             <div className="pt-6 border-t border-black/5 flex justify-between items-center">
@@ -1779,6 +2691,60 @@ export default function App() {
                               <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Description</h5>
                               <p className="text-sm leading-relaxed opacity-70 font-serif italic">{selectedRecord.description}</p>
                             </section>
+
+                            {selectedRecord.observed_content && (
+                              <section>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Observed Content</h5>
+                                <p className="text-xs leading-relaxed bg-stone-50 p-3 border-l-2 border-black">{selectedRecord.observed_content}</p>
+                              </section>
+                            )}
+
+                            {selectedRecord.connection_logic && (
+                              <section>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Connection Logic</h5>
+                                <p className="text-xs leading-relaxed italic opacity-70">{selectedRecord.connection_logic}</p>
+                              </section>
+                            )}
+
+                            {selectedRecord.significance && (
+                              <section>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Significance</h5>
+                                <p className="text-xs leading-relaxed font-bold">{selectedRecord.significance}</p>
+                              </section>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-4">
+                              <section>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Classification</h5>
+                                <span className="text-[10px] font-mono uppercase px-2 py-1 border border-black">{selectedRecord.classification || 'Unclassified'}</span>
+                              </section>
+                              <section>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Strength</h5>
+                                <span className="text-[10px] font-mono uppercase px-2 py-1 border border-black">{selectedRecord.strength || 'Unknown'}</span>
+                              </section>
+                            </div>
+
+                            <section>
+                              <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Institutional Context</h5>
+                              <div className="p-3 border border-black/5 bg-stone-50">
+                                <p className="text-[10px] font-mono uppercase opacity-50 mb-1">Normalized Institution</p>
+                                <p className="text-xs font-bold">{selectedRecord.institution_normalized || 'Not Specified'}</p>
+                              </div>
+                            </section>
+
+                            {selectedRecord.suggestions && (
+                              <section>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Follow-up Suggestions</h5>
+                                <p className="text-xs leading-relaxed opacity-70">{selectedRecord.suggestions}</p>
+                              </section>
+                            )}
+
+                            {selectedRecord.missing_verification && (
+                              <section className="p-4 border border-red-200 bg-red-50">
+                                <h5 className="text-[9px] font-mono uppercase text-red-800 mb-2 tracking-widest">Missing Verification</h5>
+                                <p className="text-xs leading-relaxed text-red-900">{selectedRecord.missing_verification}</p>
+                              </section>
+                            )}
 
                             {selectedRecord.citation_url && (
                               <section>
@@ -1990,7 +2956,51 @@ export default function App() {
                             <p className="text-[8px] font-mono opacity-30">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                           )}
                         </div>
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                        <div className="text-sm leading-relaxed markdown-body">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        </div>
+                        {msg.entities && msg.entities.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {msg.entities.map((entity, idx) => (
+                              <span key={`ent-${idx}`} className="px-1.5 py-0.5 bg-stone-100 border border-black/5 text-[8px] font-mono uppercase opacity-60">
+                                {entity}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {msg.reasoning && (
+                          <div className="mt-4 p-3 bg-stone-50 border border-black/10">
+                            <details className="group">
+                              <summary className="text-[9px] font-mono uppercase cursor-pointer list-none flex items-center gap-2 opacity-60 hover:opacity-100">
+                                <Brain className="w-3 h-3" /> System Reasoning (Why & How)
+                              </summary>
+                              <div className="mt-3 text-[11px] font-sans leading-relaxed opacity-80 border-l-2 border-black/20 pl-4 py-1">
+                                <ReactMarkdown>{msg.reasoning}</ReactMarkdown>
+                              </div>
+                            </details>
+                          </div>
+                        )}
+                        {msg.citations && msg.citations.length > 0 && (
+                          <div className="mt-4 pt-4 border-t border-black/10 space-y-2">
+                            <p className="text-[8px] font-mono uppercase opacity-40 flex items-center gap-1">
+                              <BookOpen className="w-2 h-2" /> Supporting Sources
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {msg.citations.map((cite, idx) => (
+                                <a 
+                                  key={`cite-${idx}`}
+                                  href={cite.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="flex items-center gap-2 px-2 py-1 bg-black/5 hover:bg-black hover:text-white transition-all border border-black/10 text-[9px] font-mono"
+                                >
+                                  <LinkIcon className="w-2 h-2" />
+                                  <span className="truncate max-w-[150px]">{cite.title}</span>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -2048,7 +3058,7 @@ export default function App() {
                         />
                       </div>
                       <button 
-                        onClick={() => setEditingRequest({ id: Math.random().toString(36).substr(2, 9), title: '', recipient: '', subject: '', body: '', status: 'Draft', type: 'FOIA', createdAt: new Date().toISOString() })}
+                        onClick={() => setEditingRequest({ id: Math.random().toString(36).substr(2, 9), title: '', recipient: '', institution_normalized: '', subject: '', body: '', status: 'Draft', type: 'FOIA', createdAt: new Date().toISOString(), fingerprint: '' })}
                         className="w-full md:w-auto text-[10px] font-mono uppercase bg-black text-white px-6 py-2 hover:bg-black/80 transition-all whitespace-nowrap"
                       >
                         New Request
@@ -2100,7 +3110,12 @@ export default function App() {
 
                           <div className="space-y-2 mb-6">
                             <p className="text-[10px] font-mono uppercase opacity-50">Recipient: <span className="text-black opacity-100">{req.recipient}</span></p>
+                            {req.institution_normalized && <p className="text-[10px] font-mono uppercase opacity-50">Institution: <span className="text-black opacity-100">{req.institution_normalized}</span></p>}
+                            {req.department && <p className="text-[10px] font-mono uppercase opacity-50">Department: <span className="text-black opacity-100">{req.department}</span></p>}
                             <p className="text-[10px] font-mono uppercase opacity-50">Subject: <span className="text-black opacity-100">{req.subject}</span></p>
+                            {req.destination_email && <p className="text-[10px] font-mono uppercase opacity-50">Email: <span className="text-black opacity-100">{req.destination_email}</span></p>}
+                            {req.submission_portal && <p className="text-[10px] font-mono uppercase opacity-50">Portal: <a href={req.submission_portal} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{req.submission_portal}</a></p>}
+                            {req.mailing_address && <p className="text-[10px] font-mono uppercase opacity-50">Mailing Address: <span className="text-black opacity-100 italic">{req.mailing_address}</span></p>}
                           </div>
 
                           <div className="flex gap-3">
@@ -2129,30 +3144,29 @@ export default function App() {
               </motion.div>
             )}
 
-            {activeTab === 'document-sync' && (
+            {activeTab === 'sources' && (
               <motion.div
-                key="document-sync"
+                key="sources"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
                 className="h-full overflow-y-auto p-6 md:p-12"
               >
                 <div className="max-w-6xl mx-auto space-y-16">
-                  {/* Section 1: Research Sources */}
                   <section>
                     <div className="flex justify-between items-end mb-6 border-b border-black pb-4">
-                      <h2 className="text-3xl font-serif italic">Research Sources</h2>
+                      <h2 className="text-3xl font-serif italic">Evidence Sources</h2>
                       <div className="flex gap-2">
                         <label className="cursor-pointer text-[10px] font-mono uppercase border border-black px-4 py-2 hover:bg-black hover:text-white transition-all flex items-center gap-2">
                           <Upload className="w-3 h-3" />
-                          <span>Upload Notes</span>
+                          <span>Upload Document</span>
                           <input type="file" className="hidden" multiple onChange={handleFileUpload} />
                         </label>
                         <button 
                           onClick={() => setEditingSource({ id: Math.random().toString(36).substr(2, 9), title: '', url: '', type: 'Primary', addedAt: new Date().toISOString() })}
                           className="text-[10px] font-mono uppercase bg-black text-white px-4 py-2 hover:bg-black/80 transition-all"
                         >
-                          Add Source
+                          Add Link
                         </button>
                       </div>
                     </div>
@@ -2208,6 +3222,7 @@ export default function App() {
                                   "text-[8px] font-mono px-1 uppercase",
                                   source.type === 'Upload' ? "bg-black text-white" : "bg-black/10 text-black"
                                 )}>{source.type}</span>
+                                {source.classification && <span className="text-[8px] font-mono bg-blue-500 text-white px-1 uppercase">{source.classification}</span>}
                                 {source.url === 'Local File' && <span className="text-[8px] font-mono bg-emerald-500 text-white px-1 uppercase">Local</span>}
                               </div>
                               <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
@@ -2223,6 +3238,11 @@ export default function App() {
                               </div>
                             </div>
                             <h4 className="font-serif italic text-lg mb-2">{source.title}</h4>
+                            <div className="space-y-1 mb-4">
+                              {source.institution_normalized && <p className="text-[9px] font-mono uppercase opacity-50">Institution: <span className="text-black opacity-100">{source.institution_normalized}</span></p>}
+                              {source.department && <p className="text-[9px] font-mono uppercase opacity-50">Department: <span className="text-black opacity-100">{source.department}</span></p>}
+                              {source.physical_location && <p className="text-[9px] font-mono uppercase opacity-50">Location: <span className="text-black opacity-100 italic">{source.physical_location}</span></p>}
+                            </div>
                             {source.url !== 'Local File' ? (
                               <a href={source.url} target="_blank" rel="noreferrer" className="text-[10px] font-mono text-blue-600 hover:underline break-all block mb-4">
                                 {source.url}
@@ -2239,8 +3259,20 @@ export default function App() {
                       </div>
                     )}
                   </section>
+                </div>
+              </motion.div>
+            )}
 
-                  {/* Section 1.5: Uploaded Document Sync */}
+            {activeTab === 'data-management' && (
+              <motion.div
+                key="data-management"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="h-full overflow-y-auto p-6 md:p-12"
+              >
+                <div className="max-w-6xl mx-auto space-y-16">
+                  {/* Section 1: Uploaded Document Sync */}
                   <section className="space-y-8">
                     {isParsing && (
                       <div className="bg-black text-white p-4 border border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)] animate-pulse flex items-center gap-3">
@@ -2249,52 +3281,56 @@ export default function App() {
                       </div>
                     )}
 
-                    {uploadedFiles.length > 0 && (
-                      <section>
-                        <div className="flex justify-between items-end mb-6 border-b border-black pb-4">
-                          <h2 className="text-3xl font-serif italic">Document Sync</h2>
-                          <div className="flex items-center gap-4">
-                            <p className="text-[10px] font-mono opacity-50 uppercase tracking-widest">{uploadedFiles.length} Files Parsed Across System</p>
-                            <label className="cursor-pointer bg-black text-white px-4 py-2 text-[10px] font-mono uppercase hover:bg-black/80 transition-all">
-                              Upload New
-                              <input type="file" multiple className="hidden" onChange={handleFileUpload} />
-                            </label>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          {uploadedFiles.map((file, idx) => (
-                            <div key={`upload-${idx}`} className="border border-black p-6 bg-stone-50 flex flex-col">
-                              <div className="flex justify-between items-start mb-4">
-                                <div className="flex items-center gap-3">
-                                  <FileText className="w-5 h-5" />
-                                  <h4 className="font-serif italic text-xl">{file.name}</h4>
-                                </div>
-                                <span className="text-[8px] font-mono bg-black text-white px-2 py-1 uppercase tracking-widest">PARSED</span>
+                    <div className="flex justify-between items-end mb-6 border-b border-black pb-4">
+                      <h2 className="text-3xl font-serif italic">Document Upload & Sync</h2>
+                      <div className="flex items-center gap-4">
+                        <p className="text-[10px] font-mono opacity-50 uppercase tracking-widest">{uploadedFiles.length} Files Parsed</p>
+                        <label className="cursor-pointer bg-black text-white px-4 py-2 text-[10px] font-mono uppercase hover:bg-black/80 transition-all">
+                          Upload .txt / .docx
+                          <input type="file" multiple className="hidden" onChange={handleFileUpload} />
+                        </label>
+                      </div>
+                    </div>
+
+                    {uploadedFiles.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {uploadedFiles.map((file, idx) => (
+                          <div key={`upload-${idx}`} className="border border-black p-6 bg-stone-50 flex flex-col">
+                            <div className="flex justify-between items-start mb-4">
+                              <div className="flex items-center gap-3">
+                                <FileText className="w-5 h-5" />
+                                <h4 className="font-serif italic text-xl">{file.name}</h4>
                               </div>
-                              <div className="flex-1 max-h-32 overflow-y-auto mb-6 p-4 bg-white border border-black/10 text-[10px] font-mono leading-relaxed opacity-60 whitespace-pre-wrap">
-                                {file.content}
-                              </div>
-                              <div className="flex gap-3">
-                                <button 
-                                  onClick={() => {
-                                    const source = sources.find(s => s.title === `Uploaded: ${file.name}`);
-                                    if (source) setViewingSource(source);
-                                  }}
-                                  className="flex-1 border border-black p-2 text-[9px] font-mono uppercase font-bold hover:bg-black hover:text-white transition-all"
-                                >
-                                  View Full Text
-                                </button>
-                                <button 
-                                  onClick={() => parseUploadedDocument(file.name, file.content)}
-                                  className="flex-1 border border-black p-2 text-[9px] font-mono uppercase font-bold hover:bg-black hover:text-white transition-all"
-                                >
-                                  Re-Parse
-                                </button>
-                              </div>
+                              <span className="text-[8px] font-mono bg-black text-white px-2 py-1 uppercase tracking-widest">PARSED</span>
                             </div>
-                          ))}
-                        </div>
-                      </section>
+                            <div className="flex-1 max-h-32 overflow-y-auto mb-6 p-4 bg-white border border-black/10 text-[10px] font-mono leading-relaxed opacity-60 whitespace-pre-wrap">
+                              {file.content}
+                            </div>
+                            <div className="flex gap-3">
+                              <button 
+                                onClick={() => {
+                                  const source = sources.find(s => s.title === `Uploaded: ${file.name}`);
+                                  if (source) setViewingSource(source);
+                                }}
+                                className="flex-1 border border-black p-2 text-[9px] font-mono uppercase font-bold hover:bg-black hover:text-white transition-all"
+                              >
+                                View Full Text
+                              </button>
+                              <button 
+                                onClick={() => parseUploadedDocument(file.name, file.content)}
+                                className="flex-1 border border-black p-2 text-[9px] font-mono uppercase font-bold hover:bg-black hover:text-white transition-all"
+                              >
+                                Re-Parse
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 opacity-20 border border-dashed border-black/20 rounded-lg">
+                        <Upload className="w-12 h-12 mx-auto mb-4" />
+                        <p className="font-serif italic text-lg">No documents uploaded yet. Upload .txt or .docx files to parse them into the system.</p>
+                      </div>
                     )}
                   </section>
 
@@ -2391,7 +3427,7 @@ export default function App() {
                             ].map((file) => (
                               <div key={file.name} className="flex justify-between items-center text-[10px] font-mono">
                                 <span className="opacity-70">{file.name}</span>
-                                <button onClick={() => alert('Remote analysis is premium.')} className="underline">ANALYZE</button>
+                                <button onClick={() => alert('Remote research is premium.')} className="underline">RESEARCH</button>
                               </div>
                             ))}
                           </div>
@@ -2470,6 +3506,12 @@ export default function App() {
                                 point.priority === 'Medium' ? "border-yellow-600 text-yellow-600" :
                                 "border-blue-600 text-blue-600"
                               )}>{point.priority}</span>
+                              {point.inference_type && (
+                                <span className={cn(
+                                  "text-[8px] font-mono px-1 uppercase border",
+                                  point.inference_type === 'Direct' ? "border-green-600 text-green-600" : "border-purple-600 text-purple-600"
+                                )}>{point.inference_type}</span>
+                              )}
                             </div>
                             <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
                               <button onClick={() => setEditingResearchPoint(point)} className="p-1 hover:bg-black/5"><Edit3 className="w-3 h-3" /></button>
@@ -2486,6 +3528,24 @@ export default function App() {
                               "bg-gray-50 text-gray-800 border-gray-200"
                             )}>{point.status}</span>
                           </div>
+                          {point.explanation && (
+                            <div className="mb-4">
+                              <label className="text-[7px] font-mono uppercase opacity-50 block mb-1">Explanation</label>
+                              <p className="text-[10px] leading-relaxed opacity-70">{point.explanation}</p>
+                            </div>
+                          )}
+                          {point.connection_to_pattern && (
+                            <div className="mb-4">
+                              <label className="text-[7px] font-mono uppercase opacity-50 block mb-1">Pattern Connection</label>
+                              <p className="text-[10px] leading-relaxed italic opacity-70">{point.connection_to_pattern}</p>
+                            </div>
+                          )}
+                          {point.verification_needs && (
+                            <div className="mb-4 p-2 bg-red-50 border-l border-red-600">
+                              <label className="text-[7px] font-mono uppercase text-red-800 block mb-1">Verification Needs</label>
+                              <p className="text-[10px] leading-relaxed text-red-900">{point.verification_needs}</p>
+                            </div>
+                          )}
                           {point.searchQuery && (
                             <div className="mb-4 p-2 bg-black/5 border-l border-black">
                               <label className="text-[7px] font-mono uppercase opacity-50 block mb-1">Generated Query</label>
@@ -2536,10 +3596,10 @@ export default function App() {
                     <div className="flex justify-between items-end mb-10 border-b border-black pb-4">
                       <div>
                         <h2 className="text-3xl font-serif italic">AI Research Suggestions</h2>
-                        <p className="text-[10px] font-mono opacity-50 uppercase tracking-widest mt-1">Strategic Analysis of {data?.results?.length || 0} Evidence Points</p>
+                        <p className="text-[10px] font-mono opacity-50 uppercase tracking-widest mt-1">Strategic Research of {data?.results?.length || 0} Evidence Points</p>
                       </div>
                       <button 
-                        onClick={handleDeepAnalysis}
+                        onClick={() => handleDeepAnalysis()}
                         disabled={isAnalyzingSuggestions || !data}
                         className={cn(
                           "px-8 py-4 bg-black text-white text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all flex items-center gap-2",
@@ -2548,11 +3608,11 @@ export default function App() {
                       >
                         {isAnalyzingSuggestions ? (
                           <>
-                            <Loader2 className="w-4 h-4 animate-spin" /> Analyzing...
+                            <Loader2 className="w-4 h-4 animate-spin" /> Researching...
                           </>
                         ) : (
                           <>
-                            <Sparkles className="w-4 h-4" /> Initiate Deep Analysis
+                            <Sparkles className="w-4 h-4" /> Initiate Deep Research
                           </>
                         )}
                       </button>
@@ -2589,10 +3649,60 @@ export default function App() {
                                     {suggestionChatMessages.map((msg, i) => (
                                       <div key={`smsg-${msg.timestamp}-${i}`} className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}>
                                         <div className={cn(
-                                          "max-w-[90%] p-3 text-[10px] leading-relaxed",
-                                          msg.role === 'user' ? "bg-black text-white" : "bg-white border border-black"
+                                          "max-w-[90%] p-3 text-[10px] leading-relaxed border",
+                                          msg.role === 'user' ? "bg-black text-white border-black shadow-md" : "bg-white border-black"
                                         )}>
-                                          {msg.content}
+                                          <div className="flex justify-between items-end mb-1 gap-4">
+                                            <p className="text-[7px] font-mono uppercase opacity-50">{msg.role === 'user' ? 'Inquirer' : 'ODEN Strategist'}</p>
+                                            {msg.timestamp && (
+                                              <p className="text-[6px] font-mono opacity-30">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                            )}
+                                          </div>
+                                          <div className="markdown-body">
+                                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                          </div>
+                                          {msg.entities && msg.entities.length > 0 && (
+                                            <div className="mt-2 flex flex-wrap gap-1">
+                                              {msg.entities.map((entity, idx) => (
+                                                <span key={`sent-${idx}`} className="px-1 py-0.5 bg-stone-100 border border-black/5 text-[7px] font-mono uppercase opacity-60">
+                                                  {entity}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {msg.reasoning && (
+                                            <div className="mt-3 p-2 bg-stone-50 border border-black/10">
+                                              <details className="group">
+                                                <summary className="text-[7px] font-mono uppercase cursor-pointer list-none flex items-center gap-1 opacity-60 hover:opacity-100">
+                                                  <Brain className="w-2 h-2" /> Reasoning
+                                                </summary>
+                                                <div className="mt-2 text-[9px] font-sans leading-relaxed opacity-80 border-l border-black/20 pl-2 py-0.5">
+                                                  <ReactMarkdown>{msg.reasoning}</ReactMarkdown>
+                                                </div>
+                                              </details>
+                                            </div>
+                                          )}
+                                          {msg.citations && msg.citations.length > 0 && (
+                                            <div className="mt-3 pt-3 border-t border-black/10 space-y-1.5">
+                                              <p className="text-[7px] font-mono uppercase opacity-40 flex items-center gap-1">
+                                                <BookOpen className="w-2 h-2" /> Sources
+                                              </p>
+                                              <div className="flex flex-wrap gap-1.5">
+                                                {msg.citations.map((cite, idx) => (
+                                                  <a 
+                                                    key={`scite-${idx}`}
+                                                    href={cite.url}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="flex items-center gap-1.5 px-1.5 py-0.5 bg-black/5 hover:bg-black hover:text-white transition-all border border-black/10 text-[7px] font-mono"
+                                                  >
+                                                    <LinkIcon className="w-2 h-2" />
+                                                    <span className="truncate max-w-[100px]">{cite.title}</span>
+                                                  </a>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
                                         </div>
                                       </div>
                                     ))}
@@ -2653,16 +3763,28 @@ export default function App() {
                                   <div className="space-y-3">
                                     <h4 className="text-[8px] font-mono uppercase tracking-widest opacity-40">Strategic Tools</h4>
                                     <div className="grid grid-cols-2 gap-2">
-                                      <button className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white">
-                                        Analyze Gaps
+                                      <button 
+                                        onClick={() => handleDeepAnalysis('institutional gaps')}
+                                        className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white"
+                                      >
+                                        Research Gaps
                                       </button>
-                                      <button className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white">
+                                      <button 
+                                        onClick={() => handleDeepAnalysis('pattern recognition and links')}
+                                        className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white"
+                                      >
                                         Verify Links
                                       </button>
-                                      <button className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white">
+                                      <button 
+                                        onClick={() => handleDeepAnalysis('methodological advice')}
+                                        className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white"
+                                      >
                                         Methodology
                                       </button>
-                                      <button className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white">
+                                      <button 
+                                        onClick={() => alert('Exporting Strategic Brief...')}
+                                        className="p-3 border border-black text-[8px] font-mono uppercase hover:bg-black hover:text-white transition-all bg-white"
+                                      >
                                         Export Strat
                                       </button>
                                     </div>
@@ -2730,8 +3852,13 @@ export default function App() {
                                         ...data,
                                         results: [...(data.results || []), newRecord],
                                         links: [...(data.links || []), ...newLinks]
-                                      });
-                                      setSuggestions({...suggestions, bridges: suggestions.bridges.filter((_, i) => i !== idx)});
+                                      } as ResearchResponse);
+                                      if (suggestions) {
+                                        setSuggestions({
+                                          ...suggestions, 
+                                          bridges: (suggestions.bridges || []).filter((_, i) => i !== idx)
+                                        });
+                                      }
                                     }}
                                     className="w-full md:w-auto px-8 border border-black p-4 text-[10px] font-mono uppercase font-bold hover:bg-black hover:text-white transition-all tracking-widest"
                                   >
@@ -2877,7 +4004,12 @@ export default function App() {
                                         ...data,
                                         results: [...(data.results || []), newRecord]
                                       });
-                                      setSuggestions({...suggestions, gaps: suggestions.gaps.filter((_, i) => i !== idx)});
+                                      if (suggestions) {
+                                        setSuggestions({
+                                          ...suggestions, 
+                                          gaps: (suggestions.gaps || []).filter((_, i) => i !== idx)
+                                        });
+                                      }
                                     }}
                                     className="text-[10px] font-mono uppercase font-bold border-b border-black hover:opacity-50 transition-all"
                                   >
@@ -2998,7 +4130,12 @@ export default function App() {
                                           searchQuery: `Investigate ${area.title}`,
                                           createdAt: new Date().toISOString()
                                         }, ...prev]);
-                                        setSuggestions({...suggestions, researchAreas: suggestions.researchAreas.filter((_, i) => i !== idx)});
+                                        if (suggestions) {
+                                          setSuggestions({
+                                            ...suggestions, 
+                                            researchAreas: (suggestions.researchAreas || []).filter((_, i) => i !== idx)
+                                          });
+                                        }
                                       }}
                                       className="text-[10px] font-mono uppercase font-bold border-b border-black hover:opacity-50 transition-all"
                                     >
@@ -3271,7 +4408,46 @@ export default function App() {
                           <option value="contested">Contested (Purple)</option>
                         </select>
                       </div>
+                    </div>
 
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Classification</label>
+                        <select 
+                          value={editingRecord.classification || 'unverified'}
+                          onChange={(e) => setEditingRecord({...editingRecord, classification: e.target.value as any})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black bg-white"
+                        >
+                          <option value="verified">Verified</option>
+                          <option value="unverified">Unverified</option>
+                          <option value="gap">Gap</option>
+                          <option value="contested">Contested</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Strength</label>
+                        <select 
+                          value={editingRecord.strength || 'Noise'}
+                          onChange={(e) => setEditingRecord({...editingRecord, strength: e.target.value as any})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black bg-white"
+                        >
+                          <option value="Strong">Strong</option>
+                          <option value="Weak">Weak</option>
+                          <option value="Noise">Noise</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Normalized Institution</label>
+                        <input 
+                          type="text" 
+                          value={editingRecord.institution_normalized || ''}
+                          onChange={(e) => setEditingRecord({...editingRecord, institution_normalized: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        />
+                      </div>
                       <div>
                         <label className="text-[10px] font-mono uppercase font-bold block mb-2">Priority / Weight (1-10)</label>
                         <input 
@@ -3288,11 +4464,63 @@ export default function App() {
                       <div>
                         <label className="text-[10px] font-mono uppercase font-bold block mb-2">Description</label>
                         <textarea 
-                          rows={4}
+                          rows={3}
                           value={editingRecord.description}
                           onChange={(e) => setEditingRecord({...editingRecord, description: e.target.value})}
                           className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
                         />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Observed Content</label>
+                        <textarea 
+                          rows={3}
+                          value={editingRecord.observed_content || ''}
+                          onChange={(e) => setEditingRecord({...editingRecord, observed_content: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-6">
+                        <div>
+                          <label className="text-[10px] font-mono uppercase font-bold block mb-2">Connection Logic</label>
+                          <textarea 
+                            rows={3}
+                            value={editingRecord.connection_logic || ''}
+                            onChange={(e) => setEditingRecord({...editingRecord, connection_logic: e.target.value})}
+                            className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono uppercase font-bold block mb-2">Significance</label>
+                          <textarea 
+                            rows={3}
+                            value={editingRecord.significance || ''}
+                            onChange={(e) => setEditingRecord({...editingRecord, significance: e.target.value})}
+                            className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-6">
+                        <div>
+                          <label className="text-[10px] font-mono uppercase font-bold block mb-2">Follow-up Suggestions</label>
+                          <textarea 
+                            rows={3}
+                            value={editingRecord.suggestions || ''}
+                            onChange={(e) => setEditingRecord({...editingRecord, suggestions: e.target.value})}
+                            className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-mono uppercase font-bold block mb-2">Missing Verification</label>
+                          <textarea 
+                            rows={3}
+                            value={editingRecord.missing_verification || ''}
+                            onChange={(e) => setEditingRecord({...editingRecord, missing_verification: e.target.value})}
+                            className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                          />
+                        </div>
                       </div>
 
                       <div>
@@ -3322,7 +4550,7 @@ export default function App() {
                   <div className="mt-8 border-t border-black pt-8">
                     <h4 className="text-[10px] font-mono uppercase font-bold mb-4">Connections</h4>
                     <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                      {data?.links.filter(l => l.source === editingRecord.record_id || l.target === editingRecord.record_id).map((link, idx) => (
+                      {data?.links?.filter(l => l.source === editingRecord.record_id || l.target === editingRecord.record_id).map((link, idx) => (
                         <div key={`edit-link-${idx}`} className="flex justify-between items-center p-2 bg-stone-50 border border-black/10 text-[10px] font-mono">
                           <span>{link.source === editingRecord.record_id ? 'TO' : 'FROM'}: {data.results.find(n => n.record_id === (link.source === editingRecord.record_id ? link.target : link.source))?.label || 'Unknown'}</span>
                           <button 
@@ -3330,8 +4558,8 @@ export default function App() {
                               if (!data) return;
                               setData({
                                 ...data,
-                                links: data.links.filter((_, i) => i !== data.links.indexOf(link))
-                              });
+                                links: (data.links || []).filter((_, i) => i !== (data.links || []).indexOf(link))
+                              } as ResearchResponse);
                             }}
                             className="text-red-600 hover:underline"
                           >
@@ -3346,7 +4574,7 @@ export default function App() {
                         className="flex-1 border border-black p-2 text-[10px] font-mono"
                       >
                         <option value="">Select record to link...</option>
-                        {data?.results.filter(n => n.record_id !== editingRecord.record_id).map(n => (
+                        {(data?.results || []).filter(n => n.record_id !== editingRecord.record_id).map(n => (
                           <option key={n.record_id} value={n.record_id}>{n.label}</option>
                         ))}
                       </select>
@@ -3356,8 +4584,8 @@ export default function App() {
                           if (!targetId || !data) return;
                           setData({
                             ...data,
-                            links: [...data.links, { source: editingRecord.record_id, target: targetId, label: 'Manual Connection' }]
-                          });
+                            links: [...(data.links || []), { source: editingRecord.record_id, target: targetId, label: 'Manual Connection' }]
+                          } as ResearchResponse);
                         }}
                         className="bg-black text-white px-4 py-2 text-[10px] font-mono uppercase"
                       >
@@ -3421,6 +4649,61 @@ export default function App() {
                           <option value="Sent">Sent</option>
                         </select>
                       </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Normalized Institution</label>
+                        <input 
+                          type="text" 
+                          value={editingRequest.institution_normalized || ''}
+                          onChange={(e) => setEditingRequest({...editingRequest, institution_normalized: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Department</label>
+                        <input 
+                          type="text" 
+                          value={editingRequest.department || ''}
+                          onChange={(e) => setEditingRequest({...editingRequest, department: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Destination Email</label>
+                        <input 
+                          type="text" 
+                          value={editingRequest.destination_email || ''}
+                          onChange={(e) => setEditingRequest({...editingRequest, destination_email: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                          placeholder="foia@agency.gov"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Submission Portal</label>
+                        <input 
+                          type="text" 
+                          value={editingRequest.submission_portal || ''}
+                          onChange={(e) => setEditingRequest({...editingRequest, submission_portal: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                          placeholder="https://foia.gov/..."
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-mono uppercase font-bold block mb-2">Mailing Address</label>
+                      <input 
+                        type="text" 
+                        value={editingRequest.mailing_address || ''}
+                        onChange={(e) => setEditingRequest({...editingRequest, mailing_address: e.target.value})}
+                        className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        placeholder="123 Agency Way, Washington DC..."
+                      />
                     </div>
 
                     <div>
@@ -3511,6 +4794,40 @@ export default function App() {
                         </select>
                       </div>
                       <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Classification</label>
+                        <input 
+                          type="text" 
+                          value={editingSource.classification || ''}
+                          onChange={(e) => setEditingSource({...editingSource, classification: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                          placeholder="e.g. Internal Memo"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Normalized Institution</label>
+                        <input 
+                          type="text" 
+                          value={editingSource.institution_normalized || ''}
+                          onChange={(e) => setEditingSource({...editingSource, institution_normalized: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Department</label>
+                        <input 
+                          type="text" 
+                          value={editingSource.department || ''}
+                          onChange={(e) => setEditingSource({...editingSource, department: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
                         <label className="text-[10px] font-mono uppercase font-bold block mb-2">URL / Location</label>
                         <input 
                           type="text" 
@@ -3518,6 +4835,16 @@ export default function App() {
                           onChange={(e) => setEditingSource({...editingSource, url: e.target.value})}
                           className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
                           placeholder="https://..."
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Physical Repository Details</label>
+                        <input 
+                          type="text" 
+                          value={editingSource.physical_location || ''}
+                          onChange={(e) => setEditingSource({...editingSource, physical_location: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                          placeholder="e.g. Box 4, Folder 12"
                         />
                       </div>
                     </div>
@@ -3550,6 +4877,164 @@ export default function App() {
                     <button 
                       onClick={() => setEditingSource(null)}
                       className="flex-1 border border-black py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/5 transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+
+            {/* Editing Research Point Modal */}
+            {editingResearchPoint && (
+              <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-white border-2 border-black w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 shadow-[16px_16px_0px_0px_rgba(0,0,0,1)]"
+                >
+                  <div className="flex justify-between items-start mb-8 border-b border-black pb-6">
+                    <div>
+                      <h3 className="text-2xl font-serif italic">Investigation Log Entry</h3>
+                      <p className="text-[10px] font-mono uppercase opacity-50 mt-1">ID: {editingResearchPoint.id}</p>
+                    </div>
+                    <button onClick={() => setEditingResearchPoint(null)} className="p-2 hover:bg-black/5"><X className="w-5 h-5" /></button>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div>
+                      <label className="text-[10px] font-mono uppercase font-bold block mb-2">Entry Name / Target</label>
+                      <input 
+                        type="text" 
+                        value={editingResearchPoint.name}
+                        onChange={(e) => setEditingResearchPoint({...editingResearchPoint, name: e.target.value})}
+                        className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        placeholder="e.g. CIA Record Group 263"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Type</label>
+                        <select 
+                          value={editingResearchPoint.type}
+                          onChange={(e) => setEditingResearchPoint({...editingResearchPoint, type: e.target.value as any})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none"
+                        >
+                          <option value="Institution">Institution</option>
+                          <option value="Person">Person</option>
+                          <option value="Location">Location</option>
+                          <option value="Record Group">Record Group</option>
+                          <option value="Pattern">Pattern</option>
+                          <option value="Financial">Financial</option>
+                          <option value="Policy">Policy</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Status</label>
+                        <select 
+                          value={editingResearchPoint.status}
+                          onChange={(e) => setEditingResearchPoint({...editingResearchPoint, status: e.target.value as any})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none"
+                        >
+                          <option value="Pending">Pending</option>
+                          <option value="In Progress">In Progress</option>
+                          <option value="Completed">Completed</option>
+                          <option value="Blocked">Blocked</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Priority</label>
+                        <select 
+                          value={editingResearchPoint.priority}
+                          onChange={(e) => setEditingResearchPoint({...editingResearchPoint, priority: e.target.value as any})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none"
+                        >
+                          <option value="High">High</option>
+                          <option value="Medium">Medium</option>
+                          <option value="Low">Low</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-mono uppercase font-bold block mb-2">Explanation / Context</label>
+                      <textarea 
+                        rows={3}
+                        value={editingResearchPoint.explanation || ''}
+                        onChange={(e) => setEditingResearchPoint({...editingResearchPoint, explanation: e.target.value})}
+                        className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                        placeholder="Why is this point being investigated?"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-mono uppercase font-bold block mb-2">Verification Needs</label>
+                      <input 
+                        type="text" 
+                        value={editingResearchPoint.verification_needs || ''}
+                        onChange={(e) => setEditingResearchPoint({...editingResearchPoint, verification_needs: e.target.value})}
+                        className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        placeholder="e.g. Requires cross-referencing with NARA inventory"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-mono uppercase font-bold block mb-2">Notes</label>
+                      <textarea 
+                        rows={4}
+                        value={editingResearchPoint.notes || ''}
+                        onChange={(e) => setEditingResearchPoint({...editingResearchPoint, notes: e.target.value})}
+                        className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                        placeholder="General research notes..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-12 flex gap-4">
+                    <button 
+                      onClick={() => saveResearchPoint(editingResearchPoint)}
+                      className="flex-1 bg-black text-white py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/90 transition-all"
+                    >
+                      Save Entry
+                    </button>
+                    <button 
+                      onClick={() => setEditingResearchPoint(null)}
+                      className="flex-1 border border-black py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/5 transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+
+            {/* Clear Session Confirmation Modal */}
+            {showClearConfirm && (
+              <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-white border-2 border-black w-full max-w-md p-8 shadow-[16px_16px_0px_0px_rgba(0,0,0,1)]"
+                >
+                  <h3 className="text-2xl font-serif italic mb-4 flex items-center gap-2">
+                    <AlertTriangle className="text-red-600" />
+                    Clear Research?
+                  </h3>
+                  <p className="text-sm opacity-70 mb-8 leading-relaxed">
+                    This will permanently delete all evidence records, chat logs, FOIA requests, and investigation points in this session. This action cannot be undone.
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    <button 
+                      onClick={handleClearSession}
+                      className="w-full bg-red-600 text-white py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-red-700 transition-all"
+                    >
+                      Delete Everything
+                    </button>
+                    <button 
+                      onClick={() => setShowClearConfirm(false)}
+                      className="w-full border border-black py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/5 transition-all"
                     >
                       Cancel
                     </button>
@@ -3596,11 +5081,11 @@ export default function App() {
             <span className="text-[8px] font-mono uppercase font-bold">FOIA</span>
           </button>
           <button 
-            onClick={() => setActiveTab('document-sync')}
-            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'document-sync' ? "text-black" : "text-black/30")}
+            onClick={() => setActiveTab('data-management')}
+            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'data-management' ? "text-black" : "text-black/30")}
           >
             <Cloud className="w-5 h-5" />
-            <span className="text-[8px] font-mono uppercase font-bold">Sync</span>
+            <span className="text-[8px] font-mono uppercase font-bold">Data</span>
           </button>
           <button 
             onClick={() => setActiveTab('investigation')}

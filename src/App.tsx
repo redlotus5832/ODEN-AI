@@ -2421,7 +2421,7 @@ function ODENApp() {
               onClick={() => setActiveTab('investigation')}
               className={cn("pb-1 border-b-2 transition-all", activeTab === 'investigation' ? "border-black opacity-100" : "border-transparent opacity-30 hover:opacity-100")}
             >
-              04 Research
+              04 Investigation
             </button>
             <button 
               onClick={() => setActiveTab('sources')}
@@ -2454,11 +2454,10 @@ function ODENApp() {
             <div className="absolute right-0 top-full mt-2 w-48 bg-white border border-black shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-[70]">
               <div className="p-2 flex flex-col">
                 {[
-                  { id: 'chat', label: 'Research Chat', icon: Send },
-                  { id: 'requests', label: 'FOIA Requests', icon: Mail },
-                  { id: 'suggestions', label: 'AI Suggestions', icon: Sparkles },
-                  { id: 'sources', label: 'Evidence Sources', icon: BookOpen },
-                  { id: 'data-management', label: 'Data Management', icon: Save },
+                  { id: 'chat', label: '07 Research Strategist', icon: Send },
+                  { id: 'requests', label: '08 FOIA/Archival Requests', icon: Mail },
+                  { id: 'suggestions', label: '09 AI Suggestions', icon: Sparkles },
+                  { id: 'data-management', label: '10 Data Management', icon: Save },
                 ].map(item => (
                   <button
                     key={item.id}
@@ -2562,25 +2561,25 @@ function ODENApp() {
                               how: 'Input any complex claim or narrative. ODEN’s AI analyzes the text to extract specific entities, dates, and institutional actions, categorizing them into structural threads (e.g., Financials, Personnel) for systematic investigation.'
                             },
                             { 
-                              id: 'chat', 
-                              label: '03 Strategist', 
-                              title: 'AI Research Partner',
-                              desc: 'Talk to the AI about your research. Ask for summaries, source suggestions, or deep structural analysis.',
-                              how: 'Use the chat to query your current workspace. The Strategist can help you identify institutional patterns, summarize long uploads, or suggest specific archives to search based on the records you’ve already logged.'
-                            },
-                            { 
                               id: 'dossier', 
-                              label: '05 Dossier', 
+                              label: '02 Dossier', 
                               title: 'The Master Network',
                               desc: 'Your master repository. Organize records into a network to see how they connect.',
                               how: 'The Dossier is where your verified evidence lives. View records as a list or a network graph to visualize the structural blueprint of the system you are investigating. Every connection here represents a verified link.'
                             },
                             { 
-                              id: 'data-management', 
-                              label: '07 Management', 
-                              title: 'Session & Data Control',
-                              desc: 'Sync documents, export your session, or clear local data.',
-                              how: 'ODEN is a local-first tool. Use this tab to export your entire investigation as a JSON file for backup or sharing. You can also re-import previous sessions or clear your local cache to start fresh.'
+                              id: 'list', 
+                              label: '03 Records', 
+                              title: 'The Evidence List',
+                              desc: 'A flat, searchable list of every evidence point in your current investigation.',
+                              how: 'Use the Records list for high-speed data entry and verification. Filter by status (Verified, Unverified, Gap) to prioritize your research tasks and ensure every claim is backed by a record.'
+                            },
+                            { 
+                              id: 'investigation', 
+                              label: '04 Investigation', 
+                              title: 'The Investigation Log',
+                              desc: 'Track your active research points, institutional targets, and search queries.',
+                              how: 'The Research log is your tactical dashboard. Log specific Record Groups, agencies, and people you are investigating. Use the "Search" feature to initiate AI-powered discovery passes across NARA and the web.'
                             }
                           ].map(tab => (
                             <button 
@@ -2618,24 +2617,76 @@ function ODENApp() {
                           {[
                             { 
                               id: 'sources', 
-                              label: '02 Sources', 
+                              label: '05 Sources', 
                               title: 'The Evidence Repository',
                               desc: 'Your library. Manage all uploaded documents, PDFs, and external links here.',
                               how: 'Upload primary documents or log external URLs. Every record in your Dossier should link back to a source here, ensuring a verifiable chain of evidence. Filter by "Primary" vs "Secondary" to maintain research integrity.'
                             },
                             { 
+                              id: 'timeline', 
+                              label: '06 Timeline', 
+                              title: 'Chronological Blueprint',
+                              desc: 'Visualize the temporal sequence of events and institutional actions.',
+                              how: 'The Timeline allows you to see the investigation unfold over time. Identify temporal anomalies, gaps in record-keeping, or suspicious coincidences by mapping your evidence to a precise chronological scale.'
+                            },
+                            { 
+                              id: 'chat', 
+                              label: '07 Strategist', 
+                              title: 'AI Research Partner',
+                              desc: 'Talk to the AI about your research. Ask for summaries, source suggestions, or deep structural analysis.',
+                              how: 'Use the chat to query your current workspace. The Strategist can help you identify institutional patterns, summarize long uploads, or suggest specific archives to search based on the records you’ve already logged.'
+                            },
+                            { 
+                              id: 'requests', 
+                              label: '08 Requests', 
+                              title: 'Actionable FOIA/Archival',
+                              desc: 'Draft and track FOIA or archival requests based on the gaps ODEN identifies.',
+                              how: 'Turn "Archival Gaps" into action. Draft formal requests for missing documents directly from your research findings. Track the status of each request to ensure no lead goes cold.'
+                            }
+                          ].map(tab => (
+                            <button 
+                              key={tab.id}
+                              onClick={() => setActiveTab(tab.id as any)}
+                              className="w-full p-8 border border-black bg-white hover:bg-stone-100 transition-all text-left group shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[3px] hover:translate-y-[3px] flex flex-col"
+                            >
+                              <div className="flex justify-between items-center mb-3">
+                                <h4 className="text-[10px] font-mono uppercase font-bold tracking-widest">{tab.label} — {tab.title}</h4>
+                                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all" />
+                              </div>
+                              <p className="text-sm font-serif italic mb-6">{tab.desc}</p>
+                              <div className="pt-6 border-t border-black/10 mt-auto">
+                                <p className="text-[10px] font-mono uppercase opacity-40 mb-2 tracking-tighter">How it works:</p>
+                                <p className="text-[11px] leading-relaxed opacity-70">{tab.how}</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+
+                      <section className="space-y-10">
+                        <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-40">Operational Guide — Part III</h3>
+                        <div className="space-y-10">
+                          {[
+                            { 
                               id: 'suggestions', 
-                              label: '04 Suggestions', 
+                              label: '09 Suggestions', 
                               title: 'Pattern Recognition',
                               desc: 'Materialize records from AI-detected patterns, anomalies, and institutional gaps.',
                               how: 'ODEN scans your Dossier for structural anomalies—like missing oversight steps or conflicting roles. "Materialize" these suggestions to turn AI-detected "Gaps" into active investigation targets.'
                             },
                             { 
-                              id: 'requests', 
-                              label: '06 Requests', 
-                              title: 'Actionable FOIA/Archival',
-                              desc: 'Draft and track FOIA or archival requests based on the gaps ODEN identifies.',
-                              how: 'Turn "Archival Gaps" into action. Draft formal requests for missing documents directly from your research findings. Track the status of each request to ensure no lead goes cold.'
+                              id: 'data-management', 
+                              label: '10 Management', 
+                              title: 'Session & Data Control',
+                              desc: 'Sync documents, export your session, or clear local data.',
+                              how: 'ODEN is a local-first tool. Use this tab to export your entire investigation as a JSON file for backup or sharing. You can also re-import previous sessions or clear your local cache to start fresh.'
+                            },
+                            { 
+                              id: 'settings', 
+                              label: '11 Settings', 
+                              title: 'Archival Infrastructure',
+                              desc: 'Configure your research fuel. Manage API keys and institutional connections.',
+                              how: 'The Settings tab is your command center. Connect your own Gemini or NARA API keys to unlock higher research limits and direct archival discovery passes. Manage your research persona and system preferences here.'
                             }
                           ].map(tab => (
                             <button 
@@ -4123,6 +4174,7 @@ function ODENApp() {
                 setAiConnected={setAiConnected}
                 naraApiKey={naraApiKey}
                 setNaraApiKey={setNaraApiKey}
+                searchNara={searchNara}
               />
             )}
 
@@ -6013,21 +6065,56 @@ function SettingsView({
   aiConnected, 
   setAiConnected,
   naraApiKey, 
-  setNaraApiKey 
+  setNaraApiKey,
+  searchNara
 }: { 
   aiConnected: boolean, 
   setAiConnected: (val: boolean) => void,
   naraApiKey: string, 
-  setNaraApiKey: (val: string) => void 
+  setNaraApiKey: (val: string) => void,
+  searchNara: (query: string) => Promise<any>
 }) {
   const [showNaraKey, setShowNaraKey] = useState(false);
+  const [naraTestStatus, setNaraTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
 
   const handleConnectAI = async () => {
     if (window.aistudio?.openSelectKey) {
-      await window.aistudio.openSelectKey();
+      try {
+        await window.aistudio.openSelectKey();
+        // The platform might not immediately return true for hasSelectedApiKey
+        // but we can assume success if the dialog closed without error
+        setAiConnected(true);
+      } catch (err) {
+        console.error("Failed to open key selection:", err);
+      }
+    } else {
+      console.warn("AI Studio key selection not available in this environment.");
       setAiConnected(true);
     }
   };
+
+  const testNara = async () => {
+    if (!naraApiKey) return;
+    setNaraTestStatus('testing');
+    const result = await searchNara('test');
+    if (result && !result.error) {
+      setNaraTestStatus('success');
+      setTimeout(() => setNaraTestStatus('idle'), 3000);
+    } else {
+      setNaraTestStatus('error');
+      setTimeout(() => setNaraTestStatus('idle'), 3000);
+    }
+  };
+
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio?.hasSelectedApiKey) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        if (hasKey) setAiConnected(true);
+      }
+    };
+    checkKey();
+  }, [setAiConnected]);
 
   return (
     <motion.div 
@@ -6102,19 +6189,38 @@ function SettingsView({
           <div className="space-y-4 mb-8">
             <div className="relative">
               <label className="text-[9px] font-mono uppercase opacity-50 mb-1 block">NARA API Key</label>
-              <div className="relative">
-                <input 
-                  type={showNaraKey ? "text" : "password"}
-                  value={naraApiKey}
-                  onChange={(e) => setNaraApiKey(e.target.value)}
-                  placeholder="Enter your NARA API key..."
-                  className="w-full bg-stone-50 border border-black/20 p-4 text-xs font-mono focus:outline-none focus:border-black transition-all pr-12"
-                />
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input 
+                    type={showNaraKey ? "text" : "password"}
+                    value={naraApiKey}
+                    onChange={(e) => {
+                      setNaraApiKey(e.target.value);
+                      setNaraTestStatus('idle');
+                    }}
+                    placeholder="Enter your NARA API key..."
+                    className="w-full bg-stone-50 border border-black/20 p-4 text-xs font-mono focus:outline-none focus:border-black transition-all pr-12"
+                  />
+                  <button 
+                    onClick={() => setShowNaraKey(!showNaraKey)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30 hover:opacity-100 transition-all"
+                  >
+                    {showNaraKey ? <X className="w-4 h-4" /> : <HelpCircle className="w-4 h-4" />}
+                  </button>
+                </div>
                 <button 
-                  onClick={() => setShowNaraKey(!showNaraKey)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30 hover:opacity-100 transition-all"
+                  onClick={testNara}
+                  disabled={!naraApiKey || naraTestStatus === 'testing'}
+                  className={cn(
+                    "px-6 text-[10px] font-mono uppercase font-bold border border-black transition-all",
+                    naraTestStatus === 'success' ? "bg-green-500 text-white border-green-500" :
+                    naraTestStatus === 'error' ? "bg-red-500 text-white border-red-500" :
+                    "hover:bg-black hover:text-white"
+                  )}
                 >
-                  {showNaraKey ? <X className="w-4 h-4" /> : <HelpCircle className="w-4 h-4" />}
+                  {naraTestStatus === 'testing' ? "..." : 
+                   naraTestStatus === 'success' ? "OK" : 
+                   naraTestStatus === 'error' ? "Fail" : "Test"}
                 </button>
               </div>
             </div>
@@ -6131,13 +6237,19 @@ function SettingsView({
               Without a key, the system relies on general web searches. With a key, the AI can "speak" directly to the National Archives database, 
               finding specific box numbers and folder titles that aren't indexed on the public web.
             </p>
+            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 text-[10px] font-mono text-blue-800">
+              <p className="font-bold mb-1 uppercase">How to get a key:</p>
+              <p>1. Visit the NARA API Help page.</p>
+              <p>2. Register your email address to receive your unique API key.</p>
+              <p>3. Paste the key in the field above.</p>
+            </div>
             <a 
-              href="https://github.com/usnationalarchives/catalog-api" 
+              href="https://www.archives.gov/research/catalog/help/api" 
               target="_blank" 
               rel="noreferrer"
               className="text-[10px] font-mono text-blue-600 hover:underline mt-4 inline-block"
             >
-              Get a NARA API Key →
+              Get a NARA API Key (Register via Email) →
             </a>
           </div>
         </section>

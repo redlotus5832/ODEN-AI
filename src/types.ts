@@ -79,6 +79,8 @@ export interface InvestigationItem {
   notes: string;
   searchQuery?: string;
   createdAt: string;
+  isStrategistDiscovery?: boolean;
+  discoveryReason?: string;
 }
 
 export interface Edge {
@@ -141,7 +143,8 @@ export interface ChatMessage {
   timestamp: string;
   citations?: { title: string; url: string; institution?: string }[];
   actions?: {
-    type: 'add_log' | 'add_evidence' | 'add_request' | 'update_request' | 'update_evidence' | 'update_status';
+    type: 'add_log' | 'add_evidence' | 'add_request' | 'update_request' | 'update_evidence' | 'update_status' | 'analyze_log';
+    label: string;
     data: any;
   }[];
 }

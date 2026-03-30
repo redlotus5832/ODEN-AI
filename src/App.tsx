@@ -80,7 +80,7 @@ function ODENApp() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ResearchResponse | null>(null);
   const [activeTab, setActiveTab] = useState<'guide' | 'pipeline' | 'dossier' | 'timeline' | 'list' | 'chat' | 'requests' | 'investigation' | 'suggestions' | 'sources' | 'data-management' | 'settings'>('guide');
-  const [dossierSort, setDossierSort] = useState<'default' | 'strength' | 'impact' | 'chrono' | 'institutional' | 'verification'>('default');
+  const [dossierSort, setDossierSort] = useState<'default' | 'strength' | 'impact' | 'chrono' | 'institutional' | 'verification' | 'people' | 'financial'>('default');
   const [dossierFilter, setDossierFilter] = useState<'all' | 'verified' | 'contested' | 'gap'>('all');
   const [prevTab, setPrevTab] = useState<typeof activeTab>('guide');
   const [isMobile, setIsMobile] = useState(false);
@@ -88,15 +88,49 @@ function ODENApp() {
   const [viewingRecord, setViewingRecord] = useState<EvidenceRecord | null>(null);
   const [viewingSource, setViewingSource] = useState<Source | null>(null);
 
-  const updateSource = (updatedSource: Source) => {
-    setSources(prev => prev.map(s => s.id === updatedSource.id ? updatedSource : s));
-    setEditingSource(null);
+  const consultStrategistOnLog = (log: InvestigationItem) => {
+    setActiveTab('chat');
+    const msg = `I am looking at this investigation log: "${log.name}". 
+    Details: ${log.notes}
+    Status: ${log.status}
+    Type: ${log.type}
+    
+    Analyze this finding against our current Research Claim. What are the structural implications? What should be my next step?`;
+    handleChat(msg);
+  };
+
+  const addStrategistDiscovery = (name: string, notes: string, reason: string) => {
+    const newItem: InvestigationItem = {
+      id: Math.random().toString(36).substr(2, 9),
+      name,
+      type: 'Pattern',
+      status: 'Pending',
+      priority: 'Medium',
+      notes,
+      createdAt: new Date().toISOString(),
+      isStrategistDiscovery: true,
+      discoveryReason: reason
+    };
+    setResearchPoints(prev => [newItem, ...prev]);
+    setStrategistFeed(prev => [{
+      id: Math.random().toString(36).substr(2, 9),
+      content: `Strategist Discovery: ${name}. ${reason}`,
+      timestamp: new Date().toISOString(),
+      type: 'discovery'
+    }, ...prev]);
   };
 
   const addSource = (newSource: Source) => {
     const normalized = normalizeInstitution(newSource.institution || '');
     const sourceWithNormalized = { ...newSource, institution_normalized: normalized };
     setSources(prev => [sourceWithNormalized, ...prev]);
+    setEditingSource(null);
+  };
+
+  const updateSource = (updatedSource: Source) => {
+    const normalized = normalizeInstitution(updatedSource.institution || '');
+    const sourceWithNormalized = { ...updatedSource, institution_normalized: normalized };
+    setSources(prev => prev.map(s => s.id === updatedSource.id ? sourceWithNormalized : s));
     setEditingSource(null);
   };
 
@@ -176,6 +210,7 @@ function ODENApp() {
   const [naraApiKey, setNaraApiKey] = useState(() => localStorage.getItem('oden_nara_key') || '');
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string, content: string, type: string }[]>([]);
   const [isReportingError, setIsReportingError] = useState(false);
+  const [strategistFeed, setStrategistFeed] = useState<{ id: string, content: string, timestamp: string, type: 'thought' | 'discovery' | 'alert' }[]>([]);
   
   const [sourceSearch, setSourceSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'All' | 'Primary' | 'Secondary' | 'Archive' | 'Upload' | 'Other'>('All');
@@ -353,6 +388,8 @@ function ODENApp() {
       
       CRITICAL: NEVER use placeholder text like "Unnamed Record" or "Unknown Location". Use Google Search to identify the EXACT archives, government agencies, or record-keeping bodies relevant to this specific claim.
       
+      FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows) that would leave institutional traces. These are the structural pillars of any institutional pattern.
+      
       Output ONLY valid JSON: { "checklist": [{ "item_id": string, "description": string, "expected_location": string, "priority": "high" | "medium" | "low" }] }. 
       Limit to the 5-7 most critical institutional records.`,
       config: {
@@ -405,12 +442,13 @@ function ODENApp() {
       1. PRIMARY SOURCES ONLY for verification.
       2. USER UPLOADED DATA: Prioritize user notes.
       3. SECONDARY SOURCES: Inform search only.
-      4. REASONING DEPTH: Observed, Connection, Significance.
-      5. SIGNAL VS NOISE: Distinguish support from context.
-      6. ENTITY RECOGNITION: Identify real people, agencies, and dates.
-      7. INSTITUTION NORMALIZATION: Use canonical names.
-      8. NUANCED INTERPRETATION: Use speculative language for theories.
-      9. REAL LINKS: Provide specific, working URLs.
+      4. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows).
+      5. REASONING DEPTH: Observed, Connection, Significance.
+      6. SIGNAL VS NOISE: Distinguish support from context.
+      7. ENTITY RECOGNITION: Identify real people, agencies, and dates.
+      8. INSTITUTION NORMALIZATION: Use canonical names.
+      9. NUANCED INTERPRETATION: Use speculative language for theories.
+      10. REAL LINKS: Provide specific, working URLs.
       
       Use Google Search to find the specific record at the expected location.
       Output ONLY valid JSON: { 
@@ -909,8 +947,9 @@ function ODENApp() {
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
-          3. ACKNOWLEDGE HISTORY: Look at the CHAT HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
-          4. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
+          3. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows). These are the structural pillars of any institutional pattern.
+          4. ACKNOWLEDGE HISTORY: Look at the CHAT HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          5. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
           
           STATE MANAGEMENT & DEDUPLICATION:
           - DO NOT create duplicate logs, records, or requests.
@@ -1010,6 +1049,17 @@ function ODENApp() {
               ...action.data
             };
             setResearchPoints(prev => [newPoint, ...prev]);
+            if (newPoint.isStrategistDiscovery) {
+              setStrategistFeed(prev => [{
+                id: Math.random().toString(36).substr(2, 9),
+                content: `Strategist Discovery: ${newPoint.name}. ${newPoint.discoveryReason}`,
+                timestamp: aiTimestamp,
+                type: 'discovery'
+              }, ...prev]);
+            }
+          } else if (action.type === 'analyze_log') {
+            const log = researchPoints.find(p => p.id === action.data.id);
+            if (log) consultStrategistOnLog(log);
           } else if (action.type === 'add_evidence') {
             counts.evidence++;
             const label = action.data.label && !action.data.label.toLowerCase().includes('unnamed') ? action.data.label : 'Evidence Record';
@@ -1870,12 +1920,60 @@ function ODENApp() {
     }
   };
 
-  const handleChat = async () => {
-    if (!chatInput.trim()) return;
-    const userMsg = chatInput;
+  const handleAction = (action: { type: string, label: string, data: any }) => {
+    switch (action.type) {
+      case 'add_log':
+        const newLog: InvestigationItem = {
+          id: Math.random().toString(36).substr(2, 9),
+          name: action.data.name || 'New Investigation',
+          type: action.data.type || 'Other',
+          status: 'Pending',
+          priority: action.data.priority || 'Medium',
+          notes: action.data.notes || '',
+          createdAt: new Date().toISOString(),
+          isStrategistDiscovery: action.data.isStrategistDiscovery || false,
+          discoveryReason: action.data.discoveryReason || ''
+        };
+        setResearchPoints(prev => [newLog, ...prev]);
+        if (newLog.isStrategistDiscovery) {
+          setStrategistFeed(prev => [{
+            id: Math.random().toString(36).substr(2, 9),
+            content: `Strategist Discovery: ${newLog.name}. ${newLog.discoveryReason}`,
+            timestamp: new Date().toISOString(),
+            type: 'discovery'
+          }, ...prev]);
+        }
+        setActiveTab('investigation');
+        break;
+      case 'analyze_log':
+        const log = researchPoints.find(p => p.id === action.data.id);
+        if (log) consultStrategistOnLog(log);
+        break;
+      case 'add_evidence':
+        if (data) {
+          const newEvidence: EvidenceRecord = {
+            record_id: Math.random().toString(36).substr(2, 9),
+            record_type: action.data.type || 'Document',
+            status: 'unverified',
+            label: action.data.label || 'New Evidence',
+            description: action.data.description || '',
+            citation: action.data.citation || null,
+            citation_type: action.data.citation_type || 'none',
+            institution_normalized: action.data.institution || ''
+          };
+          setData({ ...data, results: [newEvidence, ...data.results] });
+          setActiveTab('dossier');
+        }
+        break;
+    }
+  };
+
+  const handleChat = async (overrideMsg?: string) => {
+    const userMsg = overrideMsg || chatInput;
+    if (!userMsg.trim()) return;
     const timestamp = new Date().toISOString();
     setChatMessages(prev => [...prev, { role: 'user', content: userMsg, timestamp }]);
-    setChatInput('');
+    if (!overrideMsg) setChatInput('');
     setChatLoading(true);
     try {
       const genAI = getGenAI();
@@ -1979,8 +2077,9 @@ function ODENApp() {
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
-          3. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
-          4. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
+          3. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows). These are the structural pillars of any institutional pattern.
+          4. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          5. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
           
           CRITICAL: Use the SEARCH FINDINGS provided to populate your actions. NEVER use placeholder text like "Unnamed", "Unknown", or "Untitled".
           
@@ -2003,6 +2102,25 @@ function ODENApp() {
             "entities": ["Entity A", "Entity B"],
             "citations": [{"title": "Source", "url": "http://...", "institution": "NARA"}],
             "actions": [
+              {
+                "type": "add_log",
+                "label": "Log Strategist Discovery",
+                "data": {
+                  "name": "Discovery Title",
+                  "type": "Pattern | Institution | Person",
+                  "priority": "High | Medium | Low",
+                  "notes": "Detailed notes on the discovery...",
+                  "isStrategistDiscovery": true,
+                  "discoveryReason": "The structural logic behind why this was surfaced..."
+                }
+              },
+              {
+                "type": "analyze_log",
+                "label": "Analyze Related Log",
+                "data": {
+                  "id": "ID_OF_EXISTING_LOG"
+                }
+              },
               {
                 "type": "add_evidence",
                 "data": {
@@ -2038,13 +2156,14 @@ function ODENApp() {
           }
           
           ACTIONS (MUST use the 'data' object):
-          - 'add_log': { name, notes, type, priority, explanation, connection_to_pattern, verification_needs }
+          - 'add_log': { name, notes, type, priority, explanation, connection_to_pattern, verification_needs, isStrategistDiscovery, discoveryReason }
+          - 'analyze_log': { id }
           - 'add_evidence': { label, description, record_type, observed_content, why_it_matters, impact, strength, citation, citation_url, connection_logic, significance, timeline_date }
           - 'add_request': { title, recipient, institution_normalized, department, subject, body, type, destination_email, mailing_address, submission_portal }
           - 'add_source': { title, url, institution, type, notes }
           - 'update_request': { id, body, status }
           - 'update_evidence': { record_id, ...fields to update }
-          - 'update_status': { id, status, type: 'log' | 'request' }`,
+          - 'update_status': { id, status, type: 'log' | 'request' }`
         },
       });
       
@@ -2075,6 +2194,17 @@ function ODENApp() {
               ...action.data
             };
             setResearchPoints(prev => [newPoint, ...prev]);
+            if (newPoint.isStrategistDiscovery) {
+              setStrategistFeed(prev => [{
+                id: Math.random().toString(36).substr(2, 9),
+                content: `Strategist Discovery: ${newPoint.name}. ${newPoint.discoveryReason}`,
+                timestamp: aiTimestamp,
+                type: 'discovery'
+              }, ...prev]);
+            }
+          } else if (action.type === 'analyze_log') {
+            const log = researchPoints.find(p => p.id === action.data.id);
+            if (log) consultStrategistOnLog(log);
           } else if (action.type === 'add_evidence') {
             counts.evidence++;
             const label = action.data.label && !action.data.label.toLowerCase().includes('unnamed') ? action.data.label : 'Evidence Record';
@@ -2374,7 +2504,7 @@ function ODENApp() {
               <option value="pipeline">01 Pipeline</option>
               <option value="dossier">02 Dossier</option>
               <option value="list">03 Records</option>
-              <option value="investigation">04 Research</option>
+              <option value="investigation">04 Investigation Log</option>
               <option value="chat">05 Chat</option>
               <option value="requests">06 Requests</option>
               <option value="suggestions">07 Suggestions</option>
@@ -2421,7 +2551,7 @@ function ODENApp() {
               onClick={() => setActiveTab('investigation')}
               className={cn("pb-1 border-b-2 transition-all", activeTab === 'investigation' ? "border-black opacity-100" : "border-transparent opacity-30 hover:opacity-100")}
             >
-              04 Investigation
+              04 Investigation Log
             </button>
             <button 
               onClick={() => setActiveTab('sources')}
@@ -3060,6 +3190,8 @@ function ODENApp() {
                           <option value="impact">Impact</option>
                           <option value="chrono">Chronological</option>
                           <option value="institutional">Institutional</option>
+                          <option value="people">People / Actors</option>
+                          <option value="financial">Money Trails / Financial</option>
                           <option value="verification">Verification Depth</option>
                         </select>
                       </div>
@@ -3165,6 +3297,16 @@ function ODENApp() {
                             }
                             if (dossierSort === 'institutional') {
                               return (a.institution_normalized || '').localeCompare(b.institution_normalized || '');
+                            }
+                            if (dossierSort === 'people') {
+                              if (a.record_type === 'Person' && b.record_type !== 'Person') return -1;
+                              if (a.record_type !== 'Person' && b.record_type === 'Person') return 1;
+                              return a.label.localeCompare(b.label);
+                            }
+                            if (dossierSort === 'financial') {
+                              if (a.record_type === 'Financial' && b.record_type !== 'Financial') return -1;
+                              if (a.record_type !== 'Financial' && b.record_type === 'Financial') return 1;
+                              return a.label.localeCompare(b.label);
                             }
                             if (dossierSort === 'verification') {
                               const weights = { 'primary': 3, 'secondary': 2, 'none': 1 };
@@ -3632,6 +3774,25 @@ function ODENApp() {
                         <div className="text-sm leading-relaxed markdown-body">
                           <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
+                        {msg.actions && msg.actions.length > 0 && (
+                          <div className="mt-4 pt-4 border-t border-black/10 space-y-2">
+                            <p className="text-[8px] font-mono uppercase opacity-40 flex items-center gap-1">
+                              <Zap className="w-2 h-2" /> Suggested Actions
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {msg.actions.map((action, idx) => (
+                                <button 
+                                  key={`action-${idx}`}
+                                  onClick={() => handleAction(action as any)}
+                                  className="flex items-center gap-2 px-3 py-1.5 bg-black text-white hover:bg-black/80 transition-all border border-black text-[9px] font-mono uppercase font-bold"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                  {action.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         {msg.entities && msg.entities.length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1">
                             {msg.entities.map((entity, idx) => (
@@ -3695,7 +3856,7 @@ function ODENApp() {
                     onKeyDown={(e) => e.key === 'Enter' && handleChat()}
                   />
                   <button
-                    onClick={handleChat}
+                    onClick={() => handleChat()}
                     disabled={chatLoading || !chatInput.trim()}
                     className="px-6 bg-black text-white hover:bg-black/80 disabled:opacity-30 transition-all flex items-center justify-center"
                   >
@@ -4245,6 +4406,11 @@ function ODENApp() {
                                 point.priority === 'Medium' ? "border-yellow-600 text-yellow-600" :
                                 "border-blue-600 text-blue-600"
                               )}>{point.priority}</span>
+                              {point.isStrategistDiscovery && (
+                                <span className="text-[8px] font-mono bg-purple-600 text-white px-1 uppercase flex items-center gap-1 animate-pulse">
+                                  <Brain className="w-2 h-2" /> Strategist Discovery
+                                </span>
+                              )}
                               {point.inference_type && (
                                 <span className={cn(
                                   "text-[8px] font-mono px-1 uppercase border",
@@ -4291,8 +4457,22 @@ function ODENApp() {
                               <p className="text-[10px] font-mono italic break-words">"{point.searchQuery}"</p>
                             </div>
                           )}
+                          {point.discoveryReason && (
+                            <div className="mb-4 p-2 bg-purple-50 border-l border-purple-600">
+                              <label className="text-[7px] font-mono uppercase text-purple-800 block mb-1">Discovery Logic</label>
+                              <p className="text-[10px] leading-relaxed text-purple-900 italic">{point.discoveryReason}</p>
+                            </div>
+                          )}
                           {point.notes && <p className="text-xs opacity-70 leading-relaxed mb-4 flex-1">{point.notes}</p>}
-                          <p className="text-[8px] font-mono opacity-30 mt-auto">Logged: {new Date(point.createdAt).toLocaleDateString()}</p>
+                          <div className="mt-auto pt-4 border-t border-black/5 flex justify-between items-center">
+                            <p className="text-[8px] font-mono opacity-30">Logged: {new Date(point.createdAt).toLocaleDateString()}</p>
+                            <button 
+                              onClick={() => consultStrategistOnLog(point)}
+                              className="text-[9px] font-mono uppercase flex items-center gap-1 hover:underline opacity-60 hover:opacity-100 transition-all"
+                            >
+                              <MessageSquare className="w-3 h-3" /> Consult Strategist
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -5941,6 +6121,62 @@ function ODENApp() {
           </button>
         </nav>
       )}
+
+      <StrategistFeed 
+        feed={strategistFeed} 
+        onConsult={(item) => {
+          setActiveTab('chat');
+          handleChat(`I am consulting you on this discovery: "${item.content}". What are the structural implications?`);
+        }} 
+      />
+    </div>
+  );
+}
+
+function StrategistFeed({ feed, onConsult }: { feed: any[], onConsult: (item: any) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className={cn(
+      "fixed bottom-20 md:bottom-6 right-6 z-50 transition-all duration-500",
+      isOpen ? "w-80" : "w-12"
+    )}>
+      <div className="bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] overflow-hidden flex flex-col max-h-[400px]">
+        <button 
+          onClick={() => setIsOpen(!isOpen)}
+          className="bg-black text-white p-3 flex items-center justify-between hover:bg-black/90 transition-all"
+        >
+          <div className="flex items-center gap-2">
+            <Brain className="w-4 h-4" />
+            {isOpen && <span className="text-[10px] font-mono uppercase font-bold tracking-widest">Strategist Feed</span>}
+          </div>
+          {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </button>
+        
+        {isOpen && (
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
+            {feed.length === 0 ? (
+              <p className="text-[10px] font-mono opacity-40 italic text-center py-8">No background discoveries yet.</p>
+            ) : (
+              feed.map(item => (
+                <div key={item.id} className="border-l-2 border-purple-600 pl-3 py-1">
+                  <div className="flex justify-between items-start mb-1">
+                    <span className="text-[8px] font-mono uppercase text-purple-600 font-bold">{item.type}</span>
+                    <span className="text-[7px] font-mono opacity-30">{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                  <p className="text-[10px] leading-relaxed mb-2">{item.content}</p>
+                  <button 
+                    onClick={() => onConsult(item)}
+                    className="text-[8px] font-mono uppercase underline hover:text-purple-600 transition-all"
+                  >
+                    Consult Strategist →
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

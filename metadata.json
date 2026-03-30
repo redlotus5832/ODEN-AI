@@ -1,5 +1,5 @@
 {
-  "name": "ODEN AI",
-  "description": "a methodology constrained AI researcher",
+  "name": "ODEN Research System",
+  "description": "A high-fidelity AI research agent designed for deep-dive investigations, pattern recognition, and automated dossier building.",
   "requestFramePermissions": []
 }

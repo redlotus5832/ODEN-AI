@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud, Link as LinkIcon } from 'lucide-react';
+import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud, Calendar, Link as LinkIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -13,6 +13,15 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // --- Error Boundary ---
+declare global {
+  interface Window {
+    aistudio?: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
+
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: any }> {
   constructor(props: any) {
     super(props);
@@ -70,8 +79,8 @@ function ODENApp() {
   const [claim, setClaim] = useState('');
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ResearchResponse | null>(null);
-  const [activeTab, setActiveTab] = useState<'guide' | 'pipeline' | 'dossier' | 'list' | 'chat' | 'requests' | 'investigation' | 'suggestions' | 'sources' | 'data-management'>('guide');
-  const [dossierSort, setDossierSort] = useState<'default' | 'strength' | 'impact'>('default');
+  const [activeTab, setActiveTab] = useState<'guide' | 'pipeline' | 'dossier' | 'timeline' | 'list' | 'chat' | 'requests' | 'investigation' | 'suggestions' | 'sources' | 'data-management' | 'settings'>('guide');
+  const [dossierSort, setDossierSort] = useState<'default' | 'strength' | 'impact' | 'chrono' | 'institutional' | 'verification'>('default');
   const [dossierFilter, setDossierFilter] = useState<'all' | 'verified' | 'contested' | 'gap'>('all');
   const [prevTab, setPrevTab] = useState<typeof activeTab>('guide');
   const [isMobile, setIsMobile] = useState(false);
@@ -94,6 +103,18 @@ function ODENApp() {
   const askAIAboutRecord = (record: EvidenceRecord) => {
     setChatInput(`Tell me more about this ${record.record_type}: "${record.label}". What specific primary sources should I look for to verify its details?`);
     setActiveTab('chat');
+  };
+
+  const searchNara = async (query: string) => {
+    if (!naraApiKey) return { error: "NARA API Key not configured." };
+    try {
+      const url = `https://catalog.archives.gov/api/v2/records/search?q=${encodeURIComponent(query)}&api_key=${naraApiKey}`;
+      const response = await fetch(url);
+      if (!response.ok) return { error: `NARA API Error: ${response.status}` };
+      return await response.json();
+    } catch (error) {
+      return { error: "Failed to connect to NARA API." };
+    }
   };
 
   // Track previous tab for "Close" buttons
@@ -144,7 +165,37 @@ function ODENApp() {
   const [suggestionChatLoading, setSuggestionChatLoading] = useState(false);
   const [isAnalyzingSuggestions, setIsAnalyzingSuggestions] = useState(false);
 
+  // Close sidebar on mobile by default
+  useEffect(() => {
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  }, []);
+
+  const [aiConnected, setAiConnected] = useState(false);
+  const [naraApiKey, setNaraApiKey] = useState(() => localStorage.getItem('oden_nara_key') || '');
+  const [uploadedFiles, setUploadedFiles] = useState<{ name: string, content: string, type: string }[]>([]);
+  const [isReportingError, setIsReportingError] = useState(false);
+  
+  const [sourceSearch, setSourceSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<'All' | 'Primary' | 'Secondary' | 'Archive' | 'Upload' | 'Other'>('All');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
   // Load from LocalStorage on mount
+  useEffect(() => {
+    const checkAI = async () => {
+      if (window.aistudio?.hasSelectedApiKey) {
+        const connected = await window.aistudio.hasSelectedApiKey();
+        setAiConnected(connected);
+      }
+    };
+    checkAI();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('oden_nara_key', naraApiKey);
+  }, [naraApiKey]);
+
   useEffect(() => {
     const saved = localStorage.getItem('oden_session');
     if (saved) {
@@ -157,6 +208,13 @@ function ODENApp() {
         if (parsed.researchPoints) setResearchPoints(parsed.researchPoints);
         if (parsed.claim) setClaim(parsed.claim);
         if (parsed.suggestions) setSuggestions(parsed.suggestions);
+        if (parsed.suggestionChatMessages) setSuggestionChatMessages(parsed.suggestionChatMessages);
+        if (parsed.activeTab) setActiveTab(parsed.activeTab);
+        if (parsed.researchStep !== undefined) setResearchStep(parsed.researchStep);
+        if (parsed.dossierSort) setDossierSort(parsed.dossierSort);
+        if (parsed.dossierFilter) setDossierFilter(parsed.dossierFilter);
+        if (parsed.investigationFilter) setInvestigationFilter(parsed.investigationFilter);
+        if (parsed.sourceFilter) setSourceFilter(parsed.sourceFilter);
       } catch (e) {
         console.error("Failed to load session", e);
       }
@@ -172,24 +230,32 @@ function ODENApp() {
       sources,
       researchPoints,
       claim,
-      suggestions
+      suggestions,
+      suggestionChatMessages,
+      activeTab,
+      researchStep,
+      dossierSort,
+      dossierFilter,
+      investigationFilter,
+      sourceFilter
     };
     localStorage.setItem('oden_session', JSON.stringify(session));
-  }, [data, chatMessages, requests, sources, claim]);
-
-  // Close sidebar on mobile by default
-  useEffect(() => {
-    if (window.innerWidth < 768) {
-      setIsSidebarOpen(false);
-    }
-  }, []);
-
-  const [uploadedFiles, setUploadedFiles] = useState<{ name: string, content: string, type: string }[]>([]);
-  const [isReportingError, setIsReportingError] = useState(false);
-  
-  const [sourceSearch, setSourceSearch] = useState('');
-  const [sourceFilter, setSourceFilter] = useState<'All' | 'Primary' | 'Secondary' | 'Archive' | 'Upload' | 'Other'>('All');
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  }, [
+    data, 
+    chatMessages, 
+    requests, 
+    sources, 
+    researchPoints, 
+    claim, 
+    suggestions, 
+    suggestionChatMessages, 
+    activeTab, 
+    researchStep,
+    dossierSort,
+    dossierFilter,
+    investigationFilter,
+    sourceFilter
+  ]);
 
   const downloadChatLog = () => {
     const log = chatMessages.map(m => `[${new Date(m.timestamp).toLocaleString()}] ${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
@@ -285,7 +351,7 @@ function ODENApp() {
       contents: `You are a structural evidence mapper for the ODEN Research System. Given a neutralized research claim, generate the institutional evidence checklist — the complete list of record types, documents, communications, and physical traces that must exist if this claim is structurally true. 
       Testable form: "${testableForm}"
       
-      Use Google Search to identify relevant archives, government agencies, or record-keeping bodies.
+      CRITICAL: NEVER use placeholder text like "Unnamed Record" or "Unknown Location". Use Google Search to identify the EXACT archives, government agencies, or record-keeping bodies relevant to this specific claim.
       
       Output ONLY valid JSON: { "checklist": [{ "item_id": string, "description": string, "expected_location": string, "priority": "high" | "medium" | "low" }] }. 
       Limit to the 5-7 most critical institutional records.`,
@@ -333,17 +399,20 @@ function ODENApp() {
       
       ${filesContext}
       
+      CRITICAL: NEVER use placeholder text like "Unnamed Evidence", "Unknown", or "No description provided". You MUST use Google Search to find the specific record, the actual name of the office, and the real content of the finding. If you find a gap, describe the gap specifically (e.g., "Missing 1954 Correspondence from Office of X").
+      
       METHODOLOGY CONSTRAINTS:
-      1. PRIMARY SOURCES ONLY for verification: original documents, institutional records, physical evidence, direct testimony.
-      2. USER UPLOADED DATA: If the user has provided notes or documents that directly confirm or refute this item, prioritize them as primary source evidence.
-      3. SECONDARY SOURCES (Wikipedia, news accounts, documentaries, academic reconstructions) DO NOT qualify as verification. They only inform the search.
-      4. REASONING DEPTH: Break down what information was observed, explain what connects those pieces, and explain why that connection is meaningful.
-      5. SIGNAL VS NOISE: Distinguish between strong signals (direct support), weak signals (context), and noise.
-      6. ENTITY RECOGNITION: Identify all specific people, organizations, agencies, departments, locations, and dates mentioned in the sources.
-      7. INSTITUTION NORMALIZATION: Use canonical names for institutions (e.g., "National Archives and Records Administration" instead of "NARA").
+      1. PRIMARY SOURCES ONLY for verification.
+      2. USER UPLOADED DATA: Prioritize user notes.
+      3. SECONDARY SOURCES: Inform search only.
+      4. REASONING DEPTH: Observed, Connection, Significance.
+      5. SIGNAL VS NOISE: Distinguish support from context.
+      6. ENTITY RECOGNITION: Identify real people, agencies, and dates.
+      7. INSTITUTION NORMALIZATION: Use canonical names.
+      8. NUANCED INTERPRETATION: Use speculative language for theories.
+      9. REAL LINKS: Provide specific, working URLs.
       
-      Use Google Search to find the specific record at the expected location. Search for archival finding aids, record group descriptions, or digital repositories.
-      
+      Use Google Search to find the specific record at the expected location.
       Output ONLY valid JSON: { 
         "item_id": string, 
         "source_found": boolean, 
@@ -404,7 +473,7 @@ function ODENApp() {
     return JSON.parse(response.text || "{}");
   };
 
-  const runDeepAnalysis = async (data: any, chatMessages: ChatMessage[], focus?: string) => {
+  const runDeepAnalysis = async (data: any, chatMessages: ChatMessage[], discoveryFindings: string, focus?: string) => {
     const genAI = getGenAI();
     const response = await genAI.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -414,6 +483,8 @@ function ODENApp() {
       CURRENT DATA: ${JSON.stringify(data?.results || [])}
       CHAT HISTORY: ${JSON.stringify(chatMessages.slice(-5))}
       FOCUS: ${focus || 'General structural analysis'}
+      SEARCH FINDINGS:
+      ${discoveryFindings}
       
       ANALYSIS GOALS:
       1. Identify "Bridge Records": Entities (people, institutions, locations) that appear across multiple independent threads.
@@ -426,6 +497,20 @@ function ODENApp() {
       8. Identify "Methodological Advice": Specific, actionable advice for the next phase of research.
       9. Identify "Research Areas": New institutional or data domains suggested by the structural nexus.
       10. Identify "Crossovers": Specific points where different domains (e.g., financial activity ↔ policy decisions) intersect.
+      11. FOIA GENERATION: Based on the institutional gaps and search findings, draft specific FOIA or Archival requests.
+      
+      GAP LOGIC (CRITICAL):
+      - A "Gap" is not just missing info; it's a "Structural Absence."
+      - If Process A leads to Result B, and Record C is the necessary intermediary, its absence is a "Structural Anomaly."
+      - Analyze the "Deductive Basis" for every gap: Why *should* this record exist? What institutional logic dictates its creation?
+      - Consider broader research avenues: Not just government records, but corporate filings, private archives, oral histories, and physical evidence.
+      
+      FOIA DRAFTING PROTOCOL (STRICT):
+      - Use the specific Record Group (RG), Accession Number, or Office from the search findings.
+      - Use professional, archival terminology.
+      - Body MUST be 3-5 paragraphs of detailed, formal request text.
+      - Include specific search findings in the body.
+      - NEVER use placeholder text like "Untitled Request", "Unknown Recipient", or "Research Inquiry".
       
       For each conclusion, provide detailed reasoning:
       - What information was observed?
@@ -594,6 +679,25 @@ function ODENApp() {
                 required: ["title", "risk", "mitigation"],
               },
             },
+            requests: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  recipient: { type: Type.STRING },
+                  institution_normalized: { type: Type.STRING },
+                  department: { type: Type.STRING },
+                  subject: { type: Type.STRING },
+                  body: { type: Type.STRING },
+                  type: { type: Type.STRING, enum: ["FOIA", "Archival", "Institutional"] },
+                  destination_email: { type: Type.STRING },
+                  mailing_address: { type: Type.STRING },
+                  submission_portal: { type: Type.STRING }
+                },
+                required: ["title", "recipient", "institution_normalized", "subject", "body", "type"]
+              }
+            },
             reasoning: { type: Type.STRING, description: "Detailed breakdown of OBSERVED, CONNECTION, SIGNIFICANCE, and GAPS." },
             citations: {
               type: Type.ARRAY,
@@ -634,7 +738,59 @@ function ODENApp() {
     setSuggestionChatMessages(prev => [...prev, thinkingMsg]);
 
     try {
-      const result = await runDeepAnalysis(data, chatMessages, focus);
+      const genAI = getGenAI();
+      
+      // PHASE 1: DISCOVERY (Search & Grounding)
+      const discoveryTools: any[] = [{ googleSearch: {} }];
+      if (naraApiKey) {
+        discoveryTools.push({ functionDeclarations: [searchNaraFunction] });
+      }
+
+      let discoveryResponse = await genAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `You are the ODEN Senior Research Strategist. 
+        Perform a discovery search for institutional details, FOIA contacts, and archival locations related to the current research state.
+        
+        CURRENT DATA: ${JSON.stringify(data?.results || []).slice(0, 2000)}
+        FOCUS: ${focus || 'General structural analysis'}
+        
+        TASK: Find specific Record Group (RG) numbers, FOIA emails, and archival finding aids.`,
+        config: {
+          tools: discoveryTools,
+          toolConfig: naraApiKey ? { includeServerSideToolInvocations: true } as any : undefined
+        }
+      });
+
+      // Handle function calls if any
+      if (discoveryResponse.functionCalls) {
+        const results = [];
+        for (const call of discoveryResponse.functionCalls) {
+          if (call.name === 'searchNara') {
+            const data = await searchNara(call.args.query as string);
+            results.push({ name: 'searchNara', response: data });
+          }
+        }
+        
+        // Send results back to AI
+        discoveryResponse = await genAI.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: [
+            ...discoveryResponse.candidates[0].content.parts,
+            ...results.map(r => ({ functionResponse: { name: r.name, response: r.response } })),
+            { text: "Based on these NARA results and your previous search, provide the final discovery summary." }
+          ],
+          config: {
+            tools: discoveryTools,
+            toolConfig: naraApiKey ? { includeServerSideToolInvocations: true } as any : undefined
+          }
+        });
+      }
+      
+      const discoveryFindings = discoveryResponse.text || "No additional institutional details found via search.";
+
+      // PHASE 2: SYNTHESIS (Deep Analysis & FOIA Generation)
+      const result = await runDeepAnalysis(data, chatMessages, discoveryFindings, focus);
+      
       setSuggestions({
         bridges: result.bridges || [],
         gaps: result.gaps || [],
@@ -652,11 +808,33 @@ function ODENApp() {
         summary: result.summary || ''
       });
 
+      // Handle generated requests
+      if (result.requests && result.requests.length > 0) {
+        result.requests.forEach((req: any) => {
+          const subject = req.subject || '';
+          const newRequest: Request = {
+            ...req,
+            title: req.title || subject || 'New Archive Request',
+            recipient: req.recipient || '',
+            subject: subject || 'Archive Request',
+            institution_normalized: req.institution_normalized || '',
+            destination_email: req.destination_email || '',
+            mailing_address: req.mailing_address || '',
+            submission_portal: req.submission_portal || '',
+            id: Math.random().toString(36).substr(2, 9),
+            status: 'Draft',
+            createdAt: new Date().toISOString(),
+            fingerprint: generateFingerprint(req.institution_normalized || '', req.department || '', subject || 'Archive Request')
+          };
+          addRequest(newRequest);
+        });
+      }
+
       // Add the summary to the chat
       if (result.summary) {
         const summaryMsg: ChatMessage = { 
           role: 'assistant', 
-          content: result.summary, 
+          content: result.summary + (result.requests?.length > 0 ? `\n\n[SYSTEM: ${result.requests.length} new FOIA/Archival request(s) drafted based on search findings.]` : ''), 
           reasoning: result.reasoning,
           entities: result.entities,
           citations: result.citations,
@@ -687,7 +865,8 @@ function ODENApp() {
     
     try {
       const genAI = getGenAI();
-      const response = await genAI.models.generateContent({
+      // CALL 1: DISCOVERY (Search & Grounding)
+      const discoveryResponse = await genAI.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `You are the ODEN Research Strategist. You are helping a researcher analyze their current findings and suggestions.
         
@@ -696,85 +875,159 @@ function ODENApp() {
         CHAT HISTORY: ${JSON.stringify(suggestionChatMessages.slice(-5))}
         USER QUESTION: "${message}"
         
-        Provide strategic advice, suggest new search queries, or help the researcher understand the structural significance of their findings. Keep it professional, analytical, and focused on institutional evidence. Use the term "record" instead of "card" or "node".`,
+        TASK: Perform a deep-dive search to find specific institutional details, FOIA contact emails, Record Group numbers, and archival locations related to this inquiry. Provide a detailed summary of your findings.`,
         config: {
-          systemInstruction: `You are the ODEN Research Strategist. Your goal is to provide deep structural analysis and strategic guidance.
+          systemInstruction: `You are the ODEN Discovery Engine. Your sole task is to find REAL institutional details using Google Search. 
+          Focus on:
+          1. FOIA contact emails and mailing addresses.
+          2. Specific Record Groups (RG) or Accession numbers.
+          3. Department names and specific offices.
+          4. Direct links to archival finding aids.
           
-          CORE METHODOLOGY:
-          1. REASONING DEPTH (MANDATORY): For every conclusion or claim, you MUST break down:
-             - OBSERVED: What raw data or record was seen.
-             - CONNECTION: What structural link connects these pieces.
-             - SIGNIFICANCE: Why this is meaningful to the investigation.
-             - GAPS: What is still missing or needs verification.
-             This reasoning MUST be provided in the 'reasoning' field of your JSON response.
-          2. REAL LINKS & CITATIONS: You MUST provide real source links for your claims. Use the 'googleSearch' tool to find official archive pages, repository links, or direct record URLs. Populate the 'citations' array with these findings.
-          3. SIGNAL VS NOISE: Prioritize "Strong Signals" (direct records) over "Contextual Noise" (indirect indicators).
-          4. INSTITUTIONAL NORMALIZATION: Always use canonical names (e.g., "NARA" becomes "National Archives and Records Administration").
-          5. NO GUESSING: If a destination or email is unknown, state that you are searching for the most likely office based on institutional process. Do not hallucinate specific people.
-          
-          TONE: Confident, investigative, natural. No robotic disclaimers. Show the path you took to get there.`,
+          Provide your findings in a clear, detailed summary. If you find multiple sources, list them all.`,
           tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              response: { type: Type.STRING, description: "Your natural language response, including inline Markdown links." },
-              reasoning: { type: Type.STRING, description: "Detailed breakdown of OBSERVED, CONNECTION, SIGNIFICANCE, and GAPS." },
-              entities: { type: Type.ARRAY, items: { type: Type.STRING } },
-              citations: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    url: { type: Type.STRING },
-                    institution: { type: Type.STRING }
-                  },
-                  required: ["title", "url"]
-                },
-                description: "List of real source links supporting your response."
+        },
+      });
+
+      const discoveryFindings = discoveryResponse.text || "No specific institutional details found via search.";
+
+      // CALL 2: SYNTHESIS (Action & Structured Output)
+      const response = await genAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `You are the ODEN Research Strategist. 
+        
+        CURRENT SUGGESTIONS: ${JSON.stringify(suggestions)}
+        CURRENT DATA: ${JSON.stringify(data?.results?.map((r: any) => ({ label: r.label, status: r.status })) || []).slice(0, 1000)}
+        CHAT HISTORY: ${JSON.stringify(suggestionChatMessages.slice(-5))}
+        SEARCH FINDINGS:
+        ${discoveryFindings}
+        
+        USER QUESTION: "${message}"`,
+        config: {
+          systemInstruction: `You are the ODEN Research Strategist, a high-level investigative partner. You are NOT a clinical program; you are a collaborator in a deep-dive investigation.
+          
+          CORE METHODOLOGY (ODEN):
+          1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
+          2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
+          3. ACKNOWLEDGE HISTORY: Look at the CHAT HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          4. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
+          
+          STATE MANAGEMENT & DEDUPLICATION:
+          - DO NOT create duplicate logs, records, or requests.
+          - If a new finding overlaps with an existing item, use 'update_status', 'update_request', or 'update_evidence'.
+          - MERGE archive requests going to the same institution/department. Preserve distinct record targets inside the merged request.
+          
+          CRITICAL: Use the SEARCH FINDINGS provided to populate your actions. NEVER use placeholder text like "Unnamed", "Unknown", or "Untitled".
+          
+          FOIA DRAFTING PROTOCOL (STRICT):
+          - Use the specific Record Group (RG), Accession Number, or Office from the search findings.
+          - Body MUST be 3-5 paragraphs of detailed, formal request text.
+          
+          EVIDENCE PROTOCOL (MANDATORY):
+          - 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
+          - 'citation_url' MUST be the direct link to the record or finding.
+          - 'connection_logic' and 'significance' are MANDATORY.
+          
+          OUTPUT FORMAT:
+          You MUST return a valid JSON object. Do not include any text outside the JSON.
+          
+          JSON STRUCTURE EXAMPLE:
+          {
+            "response": "Your investigative analysis...",
+            "reasoning": "Observed: ... Connection: ... Significance: ... Gaps: ...",
+            "entities": ["Entity A", "Entity B"],
+            "citations": [{"title": "Source", "url": "http://...", "institution": "NARA"}],
+            "actions": [
+              {
+                "type": "add_evidence",
+                "data": {
+                  "label": "Evidence Label (e.g. RG 59, Box 12)",
+                  "description": "Contextual Analysis: Why this record matters to the structural investigation...",
+                  "record_type": "Document | Archival Collection | Manuscript",
+                  "observed_content": "Specific details seen in the finding...",
+                  "why_it_matters": "Context...",
+                  "connection_logic": "Structural link to the claim...",
+                  "significance": "Impact on the overall pattern...",
+                  "impact": "Supports | Weakens | Complicates | Leaves Open",
+                  "strength": 5,
+                  "citation": "Source Title",
+                  "citation_url": "http://..."
+                }
               },
-              actions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    type: { type: Type.STRING, enum: ["add_log", "add_evidence", "add_request", "update_request", "update_evidence", "update_status"] },
-                    data: { type: Type.OBJECT },
-                  },
-                  required: ["type", "data"],
-                },
-                nullable: true,
+              {
+                "type": "add_request",
+                "data": {
+                  "title": "FOIA: Specific Records",
+                  "recipient": "FOIA Officer",
+                  "institution_normalized": "National Archives",
+                  "department": "Special Access",
+                  "subject": "Request for RG 59...",
+                  "body": "Formal 3-5 paragraph request...",
+                  "type": "FOIA",
+                  "destination_email": "officer@agency.gov",
+                  "mailing_address": "123 Archive St",
+                  "submission_portal": "https://portal.gov"
+                }
               }
-            },
-            required: ["response", "entities", "reasoning"],
-          },
+            ]
+          }
+          
+          ACTIONS (MUST use the 'data' object):
+          - 'add_log': { name, notes, type, priority, explanation, connection_to_pattern, verification_needs }
+          - 'add_evidence': { label, description, record_type, observed_content, why_it_matters, impact, strength, citation, citation_url, connection_logic, significance, timeline_date }
+          - 'add_request': { title, recipient, institution_normalized, department, subject, body, type, destination_email, mailing_address, submission_portal }
+          - 'add_source': { title, url, institution, type, notes }
+          - 'update_request': { id, body, status }
+          - 'update_evidence': { record_id, ...fields to update }
+          - 'update_status': { id, status, type: 'log' | 'request' }`,
         },
       });
       
-      const result = JSON.parse(response.text || "{}");
+      const rawText = response.text || "{}";
+      const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const result = JSON.parse(cleanJson);
       const aiTimestamp = new Date().toISOString();
-
+      
       // Handle actions (same as handleChat)
+      let actionSummary = '';
       if (result.actions && result.actions.length > 0) {
+        const counts = { log: 0, evidence: 0, request: 0 };
         result.actions.forEach((action: any) => {
           if (action.type === 'add_log') {
+            counts.log++;
+            const name = action.data.name && !action.data.name.toLowerCase().includes('unnamed') ? action.data.name : 'New Investigation Lead';
             const newPoint: InvestigationItem = {
-              ...action.data,
-              id: Math.random().toString(36).substr(2, 9),
+              id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+              name,
+              notes: action.data.notes || "",
+              type: action.data.type || 'Other',
+              priority: action.data.priority || 'Medium',
               status: 'Pending',
-              createdAt: aiTimestamp
+              explanation: action.data.explanation || "",
+              connection_to_pattern: action.data.connection_to_pattern || "",
+              verification_needs: action.data.verification_needs || "",
+              createdAt: aiTimestamp,
+              ...action.data
             };
             setResearchPoints(prev => [newPoint, ...prev]);
           } else if (action.type === 'add_evidence') {
+            counts.evidence++;
+            const label = action.data.label && !action.data.label.toLowerCase().includes('unnamed') ? action.data.label : 'Evidence Record';
             const newEvidence: EvidenceRecord = {
-              ...action.data,
-              record_id: Math.random().toString(36).substr(2, 9),
+              record_id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+              label: label || action.data.description?.substring(0, 30) || 'Evidence Record',
+              description: action.data.description || action.data.why_it_matters || action.data.observed_content || 'No contextual analysis provided.',
+              record_type: action.data.record_type || 'Other',
               status: action.data.status || 'unverified',
               citation_type: action.data.citation_type || 'none',
               weight: action.data.weight || 5,
               impact: action.data.impact || 'Leaves Open',
-              strength: action.data.strength || 'Noise'
+              strength: action.data.strength || 'Noise',
+              connection_logic: action.data.connection_logic || "",
+              significance: action.data.significance || "",
+              citation: action.data.citation || 'Source Document',
+              citation_url: action.data.citation_url || '',
+              ...action.data
             };
             setData(prev => {
               if (!prev) return { 
@@ -786,14 +1039,36 @@ function ODENApp() {
               return { ...prev, results: [...prev.results, newEvidence] };
             });
           } else if (action.type === 'add_request') {
+            counts.request++;
+            const subject = action.data.subject || '';
             const newRequest: Request = {
               ...action.data,
+              title: action.data.title || subject || 'New Archive Request',
+              recipient: action.data.recipient || '',
+              subject: subject || 'Archive Request',
+              body: action.data.body || "",
+              type: action.data.type || 'Archival',
+              institution_normalized: action.data.institution_normalized || '',
+              destination_email: action.data.destination_email || '',
+              mailing_address: action.data.mailing_address || '',
+              submission_portal: action.data.submission_portal || action.data.portal_url || '',
               id: Math.random().toString(36).substr(2, 9),
               status: 'Draft',
               createdAt: aiTimestamp,
-              fingerprint: generateFingerprint(action.data.institution_normalized || '', action.data.department || '', action.data.subject || '')
+              fingerprint: generateFingerprint(action.data.institution_normalized || '', action.data.department || '', subject || 'Archive Request')
             };
             addRequest(newRequest);
+          } else if (action.type === 'add_source') {
+            const newSource: Source = {
+              id: Math.random().toString(36).substr(2, 9),
+              title: action.data.title || 'New Source',
+              url: action.data.url || '',
+              institution: action.data.institution || 'Unknown',
+              type: action.data.type || 'Archive',
+              notes: action.data.notes || '',
+              addedAt: aiTimestamp
+            };
+            addSource(newSource);
           } else if (action.type === 'update_request') {
             const { id, body, status } = action.data;
             setRequests(prev => prev.map(r => r.id === id ? { 
@@ -819,11 +1094,40 @@ function ODENApp() {
             }
           }
         });
+
+        const summaryParts = [];
+        if (counts.request > 0) summaryParts.push(`${counts.request} Archival request${counts.request > 1 ? 's' : ''}`);
+        if (counts.log > 0) summaryParts.push(`${counts.log} research point${counts.log > 1 ? 's' : ''}`);
+        if (counts.evidence > 0) summaryParts.push(`${counts.evidence} evidence record${counts.evidence > 1 ? 's' : ''}`);
+        
+        if (summaryParts.length > 0) {
+          actionSummary = `\n\n[SYSTEM: ${summaryParts.join(' and ')} ${counts.request + counts.log + counts.evidence > 1 ? 'have' : 'has'} been generated.]`;
+        }
+      }
+      
+      // Handle citations (Sync to Sources tab)
+      if (result.citations && result.citations.length > 0) {
+        result.citations.forEach((cit: any) => {
+          // Avoid duplicates
+          const exists = sources.some(s => s.url === cit.url);
+          if (!exists) {
+            const newSource: Source = {
+              id: Math.random().toString(36).substr(2, 9),
+              title: cit.title,
+              url: cit.url,
+              institution: cit.institution || 'Unknown',
+              type: 'Archive',
+              notes: `Generated during research on: ${claim || 'General Inquiry'}`,
+              addedAt: aiTimestamp
+            };
+            addSource(newSource);
+          }
+        });
       }
       
       const aiMsg: ChatMessage = { 
         role: 'assistant', 
-        content: result.response, 
+        content: result.response + actionSummary, 
         reasoning: result.reasoning,
         entities: result.entities,
         citations: result.citations,
@@ -902,31 +1206,34 @@ function ODENApp() {
     const genAI = getGenAI();
     const response = await genAI.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `You are a Senior Structural Analyst for the ODEN Research System. 
+      contents: `You are a Senior Structural Analyst for the ODEN Research System, an investigative partner. You are NOT a clinical program; you are a collaborator in a deep-dive investigation.
+      
       Perform a "Cross-Thread Structural Analysis" on the following evidence records for the claim: "${claim}".
       
       Your goal is to apply a consistent investigative method across historical, institutional, financial, social, and digital domains.
       
+      PROACTIVE GAP IDENTIFICATION (CRITICAL):
+      - Even if evidence is found, you MUST look for what is still missing.
+      - Identify "Institutional Gaps": Systemic absences in record groups that should exist based on institutional process.
+      - If a record group is mentioned but not fully explored, mark it as a gap.
+      
+      TONE & PARTNERSHIP (CRITICAL):
+      - Speak naturally and engagingly. Acknowledge the user's reactions, theories, and emotions.
+      - Avoid robotic, dry, or overly formal language. Be conversational but intellectually rigorous.
+      - Explain your process as you go.
+      - ELABORATE on the meaning and significance of every connection.
+      
       ANALYSIS GOALS:
-      1. Identify "Bridge Records": Entities (people, institutions, locations) that appear across multiple independent threads.
-      2. Identify "Evidence Conflicts": Contradictory data points that require resolution.
-      3. Identify "Institutional Gaps": Systemic absences in record groups that should exist based on institutional process.
-      4. Identify "Structural Anomalies": Deviations from standard institutional, financial, or social logic.
-      5. Identify "Pattern Recognition": Recurring structural signatures across different domains.
-      6. Identify "Risk Assessment": Methodological risks and potential biases in the current findings.
-      7. Identify "Key Actors": Central figures, organizations, or systems identified across the research.
-      8. Identify "Methodological Advice": Specific, actionable advice for the next phase of research.
-      9. Identify "Research Areas": New institutional or data domains suggested by the structural nexus.
-      10. Identify "Crossovers": Specific points where different domains (e.g., financial activity ↔ policy decisions) intersect.
-      
-      For each conclusion, provide detailed reasoning:
-      - What information was observed?
-      - What connects these pieces?
-      - Why is the connection meaningful?
-      - What does it suggest (without overstating certainty)?
-      - What is still missing?
-      
-      Distinguish between Strong Signals, Weak Signals, and Noise.
+      1. Identify "Bridge Records": Entities that appear across multiple independent threads.
+      2. Identify "Evidence Conflicts": Contradictory data points.
+      3. Identify "Institutional Gaps": Systemic absences in record groups that should exist.
+      4. Identify "Structural Anomalies": Deviations from standard logic.
+      5. Identify "Pattern Recognition": Recurring structural signatures.
+      6. Identify "Risk Assessment": Methodological risks.
+      7. Identify "Key Actors": Central figures or organizations.
+      8. Identify "Methodological Advice": Actionable advice for next phase.
+      9. Identify "Research Areas": New domains suggested by the nexus.
+      10. Identify "Crossovers": Intersections between different domains.
       
       Records: ${JSON.stringify(records)}
       
@@ -1347,125 +1654,219 @@ function ODENApp() {
     setError(null);
     setData(null);
     try {
-      // Phase 1: Claim Scoping
-      const scoping = await runClaimScoper(claim);
-      const subClaims: SubClaim[] = scoping.sub_claims;
+      const genAI = getGenAI();
       
-      let allClassifiedCards: EvidenceRecord[] = [];
-      
-      // Run pipeline for each sub-claim
-      for (const subClaim of subClaims) {
-        setResearchStep(2);
-        // Phase 2: Neutralize
-        const neutralized = await runNeutralizer(subClaim.claim);
+      // Phase 1: Discovery & Blueprinting (Combined)
+      setResearchStep(1);
+      const discoveryResponse = await genAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{ parts: [{ text: `You are the ODEN Discovery Engine. Analyze the claim: "${claim}".
         
-        setResearchStep(3);
-        // Phase 3: Blueprint
-        const blueprint = await runBlueprint(neutralized.testable_form);
+        TASKS:
+        1. Break it down into 3-5 testable sub-claims.
+        2. For each sub-claim, generate a research blueprint (checklist of records to find).
+        3. Use the googleSearch tool to find real, primary source links for these records.
+        4. For every institution or agency identified, you MUST find the EXACT FOIA contact details:
+           - Destination Email
+           - Mailing Address
+           - Submission Portal URL
+           - Specific Department or Office name
+        5. Find specific Record Group (RG) numbers, Accession Numbers, or Series Titles for the requested documents.
         
-        setResearchStep(4);
-        // Phase 4: Research
-        const researchResults = [];
-        for (const item of blueprint.checklist) {
-          const result = await runResearcher(item, uploadedFiles);
-          researchResults.push({ ...item, ...result });
+        OUTPUT: Provide a detailed text report of your findings. Be specific with URLs, emails, and archival identifiers.` }] }],
+        config: { 
+          tools: [{ googleSearch: {} }]
         }
-        
-        setResearchStep(5);
-        // Phase 5: Classify
-        const classification = await runClassifier(researchResults);
-        const classifiedCards: EvidenceRecord[] = researchResults.map(r => {
-          const c = classification.records.find((n: any) => n.record_id === r.item_id);
-          return { 
-            record_id: r.item_id,
-            record_type: r.source_type === 'primary' ? 'Document' : 'Event',
-            status: c?.status || "incomplete", 
-            classification: c?.classification || "unverified",
-            label: c?.label || r.description,
-            description: c?.description || r.research_preview,
-            observed_content: c?.observed_content || '',
-            connection_logic: c?.connection_logic || '',
-            significance: c?.significance || '',
-            impact: c?.impact || 'leaves_open',
-            strength: c?.strength || 5,
-            suggestions: c?.suggestions || '',
-            missing_verification: c?.missing_verification || '',
-            citation: r.citation,
-            citation_url: r.citation_url,
-            citation_type: r.source_type || 'none',
-            gap_reasoning: c?.gap_reasoning,
-            entities: r.entities || [],
-            timeline_date: r.timeline_date || null,
-            institution_normalized: r.institution_normalized || '',
-            weight: r.priority === 'high' ? 3 : r.priority === 'medium' ? 2 : 1
-          };
-        });
-        
-        allClassifiedCards = [...allClassifiedCards, ...classifiedCards];
-      }
+      });
       
-      setResearchStep(6);
-      // Phase 6: Structural Analysis (Cross-thread scan)
-      const structuralAnalysis = await runStructuralAnalyst(allClassifiedCards, claim);
+      const discoveryReport = discoveryResponse.text || "";
+      
+      // Phase 2: Intelligence Synthesis (Combined Record Generation & Analysis)
+      setResearchStep(2);
+      const synthesisResponse = await genAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{ parts: [{ text: `You are the ODEN Structural Intelligence Analyst. Synthesize the research for: "${claim}".
+        
+        RESEARCH FINDINGS & CONTACT DATA:
+        ${discoveryReport}
+        
+        CORE METHODOLOGY (ODEN):
+        1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
+        2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
+        3. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
+        
+        GOALS:
+        1. Generate 10-15 Evidence Records (Dossier items) with detailed context.
+           * CRITICAL: 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
+           * CRITICAL: 'citation_url' MUST be the direct link to the record or finding.
+           * CRITICAL: 'connection_logic' and 'significance' are MANDATORY.
+        2. Perform a Structural Analysis (Bridges, Gaps, Anomalies).
+        3. Draft 3-5 comprehensive FOIA requests for the identified gaps.
+           * FOIA DRAFTING PROTOCOL (STRICT):
+             - Use the EXACT contact details (emails, portals, addresses) found in the RESEARCH FINDINGS.
+             - Identify exact Record Group (RG), Accession Number, or Office.
+             - Body MUST be 3-5 paragraphs of detailed, formal request text. Include specific accession numbers, box numbers, or folder titles found during search. MUST NEVER BE EMPTY.
+        4. Create 5-8 Investigation Log leads.
+           * INVESTIGATION LOG PROTOCOL (MANDATORY):
+             - 'explanation': 3-5 sentences explaining the "Why" and the "How".
+             - 'connection_to_pattern': Describe structural link.
+             - 'verification_needs': List specific sources needed.
+        
+        OUTPUT FORMAT:
+        You MUST return a valid JSON object. Do not include any text outside the JSON.
+        
+        JSON STRUCTURE EXAMPLE:
+        {
+          "records": [
+            {
+              "label": "Evidence Label (e.g. RG 59, Box 12)",
+              "description": "Contextual Analysis: Why this record matters to the structural investigation...",
+              "record_type": "Document | Archival Collection | Manuscript",
+              "observed_content": "Specific details seen in the finding...",
+              "why_it_matters": "Context...",
+              "connection_logic": "Structural link to the claim...",
+              "significance": "Impact on the overall pattern...",
+              "impact": "Supports | Weakens | Complicates | Leaves Open",
+              "strength": 5,
+              "citation": "Source Title",
+              "citation_url": "http://..."
+            }
+          ],
+          "analysis": {
+            "bridges": [{"label": "Bridge", "reason": "Logic...", "records": ["Record ID"]}],
+            "institutionalGaps": [{"label": "Gap", "description": "Missing records..."}],
+            "summary": "Overall synthesis...",
+            "patternRecognition": [{"title": "Pattern", "description": "Observed trend..."}]
+          },
+          "requests": [
+            {
+              "title": "FOIA Request",
+              "recipient": "Officer Name",
+              "institution_normalized": "Agency Name",
+              "department": "FOIA Office",
+              "subject": "Request for...",
+              "body": "Formal 3-5 paragraph request...",
+              "destination_email": "officer@agency.gov",
+              "mailing_address": "Address",
+              "submission_portal": "URL"
+            }
+          ],
+          "logs": [
+            {
+              "name": "Lead Name",
+              "notes": "Notes...",
+              "type": "Lead",
+              "priority": "High",
+              "explanation": "3-5 sentence why...",
+              "connection_to_pattern": "Link...",
+              "verification_needs": "Sources..."
+            }
+          ]
+        }` }] }],
+      });
+      
+      const rawSynthesis = synthesisResponse.text || "{}";
+      const cleanSynthesis = rawSynthesis.replace(/```json/g, '').replace(/```/g, '').trim();
+      const synthesis = JSON.parse(cleanSynthesis);
+      const allClassifiedCards: EvidenceRecord[] = (synthesis.records || []).map((r: any) => ({
+        record_id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+        record_type: r.record_type || 'Document',
+        status: r.status || 'unverified',
+        label: r.label || r.description?.substring(0, 30) || 'Evidence Record',
+        description: r.description || r.why_it_matters || r.observed_content || 'No contextual analysis provided.',
+        observed_content: r.observed_content || '',
+        connection_logic: r.connection_logic || '',
+        significance: r.significance || '',
+        impact: r.impact || 'leaves_open',
+        strength: r.strength || 5,
+        citation: r.citation || 'Source Document',
+        citation_url: r.citation_url || '',
+        weight: r.weight || 2
+      }));
 
-      // Update Investigation Log with new findings
-      const newInvestigationItems: InvestigationItem[] = allClassifiedCards
-        .filter(n => n.status === 'gap' || n.status === 'unverified')
-        .map(n => ({
+      // Update Investigation Log
+      if (synthesis.logs) {
+        const newLogs = synthesis.logs.map((l: any) => ({
+          ...l,
           id: Math.random().toString(36).substr(2, 9),
-          name: n.label,
-          type: n.record_type === 'Document' ? 'Record Group' : 'Other',
           status: 'Pending',
-          priority: n.weight === 3 ? 'High' : n.weight === 2 ? 'Medium' : 'Low',
-          explanation: n.description,
-          connection_to_pattern: 'Identified during structural analysis.',
-          verification_needs: n.missing_verification || 'Requires primary source verification.',
-          supporting_sources: n.citation ? [n.citation] : [],
-          notes: n.description,
-          searchQuery: `Investigate ${n.label}`,
           createdAt: new Date().toISOString()
         }));
-      
-      setResearchPoints(prev => [...newInvestigationItems, ...prev]);
-      
+        setResearchPoints(prev => [...newLogs, ...prev]);
+      }
+
+      // Update FOIA Requests
+      if (synthesis.requests) {
+        synthesis.requests.forEach((req: any) => {
+          const subject = req.subject || '';
+          const newRequest: Request = {
+            ...req,
+            title: req.title || subject || 'New Archive Request',
+            recipient: req.recipient || '',
+            subject: subject || 'Archive Request',
+            body: req.body || '',
+            type: req.type || 'Archival',
+            institution_normalized: req.institution_normalized || '',
+            destination_email: req.destination_email || '',
+            mailing_address: req.mailing_address || '',
+            submission_portal: req.submission_portal || '',
+            id: Math.random().toString(36).substr(2, 9),
+            status: 'Draft',
+            createdAt: new Date().toISOString(),
+            fingerprint: generateFingerprint(req.institution_normalized || '', req.department || '', subject || 'Archive Request')
+          };
+          addRequest(newRequest);
+        });
+      }
+
+      const structuralAnalysis = synthesis.analysis || {};
       setSuggestions({
         bridges: structuralAnalysis.bridges || [],
-        gaps: [
-          ...allClassifiedCards.filter(n => n.status === 'gap').map(n => ({
-            label: n.label,
-            description: n.gap_reasoning?.why_should_exist || n.description
-          })),
-          ...(structuralAnalysis.institutionalGaps || [])
-        ],
-        researchAreas: structuralAnalysis.researchAreas || [],
-        crossovers: structuralAnalysis.crossovers || [],
-        entities: structuralAnalysis.entities || [],
-        anomalies: structuralAnalysis.anomalies || [],
-        conflicts: structuralAnalysis.conflicts || [],
-        keyActors: structuralAnalysis.keyActors || [],
-        methodologicalAdvice: structuralAnalysis.methodologicalAdvice || [],
-        institutionalGaps: structuralAnalysis.institutionalGaps || [],
-        structuralAnomalies: structuralAnalysis.structuralAnomalies || [],
+        gaps: structuralAnalysis.institutionalGaps || [],
+        summary: structuralAnalysis.summary || '',
         patternRecognition: structuralAnalysis.patternRecognition || [],
-        riskAssessment: structuralAnalysis.riskAssessment || [],
-        summary: structuralAnalysis.summary || ''
+        researchAreas: [],
+        crossovers: [],
+        entities: [],
+        anomalies: [],
+        conflicts: [],
+        keyActors: [],
+        methodologicalAdvice: [],
+        institutionalGaps: structuralAnalysis.institutionalGaps || [],
+        structuralAnomalies: [],
+        riskAssessment: []
       });
       
       setData({
         original_claim: claim,
-        sub_claims: subClaims,
+        sub_claims: [],
         results: allClassifiedCards,
         bridges: structuralAnalysis.bridges || [],
         summary: structuralAnalysis.summary || '',
         links: []
-      } as ResearchResponse);
+      });
+      
       setActiveTab('dossier');
     } catch (err: any) {
       console.error("Research Error:", err);
       setError(err.message);
-      reportError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const searchNaraFunction = {
+    name: "searchNara",
+    description: "Search the National Archives (NARA) Catalog for specific records, Record Groups, and folder titles.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: {
+          type: Type.STRING,
+          description: "The search query (e.g., 'Record Group 59 Department of State', 'JFK assassination records')"
+        }
+      },
+      required: ["query"]
     }
   };
 
@@ -1494,131 +1895,204 @@ function ODENApp() {
             impact: n.impact,
             strength: n.strength,
             institution: n.institution_normalized,
-            description: n.description 
-          })) || []).slice(0, 3000)}\n\n`
+            observed: n.observed_content,
+            why_matters: n.why_it_matters,
+            significance: n.significance,
+            timeline_date: n.timeline_date
+          })) || []).slice(0, 5000)}\n\n`
         : '';
       
       const sourcesContext = sources.length > 0
-        ? `CURRENT SOURCES:\n${sources.map(s => `${s.title} (${s.type}) - ${s.institution_normalized}`).join(', ')}\n\n`
+        ? `CURRENT SOURCES:\n${sources.map(s => `${s.title} (${s.type}) - ${s.institution_normalized} | URL: ${s.url || 'N/A'}`).join('\n')}\n\n`
         : '';
       
       const investigationContext = researchPoints.length > 0
-        ? `CURRENT INVESTIGATION LOG:\n${researchPoints.map(p => `${p.name} [${p.status}] - ${p.explanation}`).join('\n')}\n\n`
+        ? `CURRENT INVESTIGATION LOG:\n${researchPoints.map(p => `${p.name} [${p.status}] | Type: ${p.type} | Notes: ${p.notes} | Verification: ${p.verification_needs}`).join('\n')}\n\n`
         : '';
 
       const requestsContext = requests.length > 0
-        ? `CURRENT ARCHIVE/FOIA REQUESTS:\n${requests.map(r => `ID: ${r.id} | ${r.title} to ${r.institution_normalized} (${r.status}) | Fingerprint: ${r.fingerprint}`).join('\n')}\n\n`
+        ? `CURRENT ARCHIVE/FOIA REQUESTS:\n${requests.map(r => `ID: ${r.id} | ${r.title} to ${r.institution_normalized} (${r.status}) | Fingerprint: ${r.fingerprint} | Body: ${r.body.slice(0, 200)}...`).join('\n')}\n\n`
         : '';
 
+      // CALL 1: DISCOVERY (Search & Grounding)
+      const discoveryTools: any[] = [{ googleSearch: {} }];
+      if (naraApiKey) {
+        discoveryTools.push({ functionDeclarations: [searchNaraFunction] });
+      }
+
+      let discoveryResponse = await genAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [
+          { parts: [{ text: `CONTEXT:\n${filesContext}${dataContext}${sourcesContext}${investigationContext}${requestsContext}${historyContext}\n\nCURRENT INQUIRY: ${userMsg}\n\nTASK: Perform a deep-dive search to find specific institutional details, FOIA contact emails, Record Group numbers, and archival locations related to this inquiry. Provide a detailed summary of your findings.` }] }
+        ],
+        config: {
+          systemInstruction: `You are the ODEN Discovery Engine. Your sole task is to find REAL institutional details using Google Search and the NARA Catalog. 
+          Focus on:
+          1. FOIA contact emails and mailing addresses.
+          2. Specific Record Groups (RG) or Accession numbers.
+          3. Department names and specific offices.
+          4. Direct links to archival finding aids.
+          
+          If you have access to the NARA Catalog tool, use it for specific archival Record Group searches.
+          Provide your findings in a clear, detailed summary. If you find multiple sources, list them all.`,
+          tools: discoveryTools,
+          toolConfig: naraApiKey ? { includeServerSideToolInvocations: true } as any : undefined
+        },
+      });
+
+      // Handle function calls if any
+      if (discoveryResponse.functionCalls) {
+        const results = [];
+        for (const call of discoveryResponse.functionCalls) {
+          if (call.name === 'searchNara') {
+            const data = await searchNara(call.args.query as string);
+            results.push({ name: 'searchNara', response: data });
+          }
+        }
+        
+        // Send results back to AI
+        discoveryResponse = await genAI.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: [
+            ...discoveryResponse.candidates[0].content.parts,
+            ...results.map(r => ({ functionResponse: { name: r.name, response: r.response } })),
+            { text: "Based on these NARA results and your previous search, provide the final discovery summary." }
+          ],
+          config: {
+            tools: discoveryTools,
+            toolConfig: naraApiKey ? { includeServerSideToolInvocations: true } as any : undefined
+          }
+        });
+      }
+
+      const discoveryFindings = discoveryResponse.text || "No specific institutional details found via search.";
+
+      // CALL 2: SYNTHESIS (Action & Structured Output)
       const response = await genAI.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [
-          { parts: [{ text: `CONTEXT:\n${filesContext}${dataContext}${sourcesContext}${investigationContext}${requestsContext}${historyContext}\n\nCURRENT INQUIRY: ${userMsg}` }] }
+          { parts: [{ text: `CONTEXT:\n${filesContext}${dataContext}${sourcesContext}${investigationContext}${requestsContext}${historyContext}\n\nSEARCH FINDINGS:\n${discoveryFindings}\n\nCURRENT INQUIRY: ${userMsg}` }] }
         ],
         config: {
-          systemInstruction: `You are the ODEN Structural Intelligence Engine. Your goal is to apply a consistent investigative method across historical, institutional, financial, and social domains.
+          systemInstruction: `You are the ODEN Structural Intelligence Engine, a high-level investigative partner. You are NOT a clinical program; you are a collaborator in a deep-dive investigation.
           
-          CORE METHODOLOGY:
-          1. REASONING DEPTH (MANDATORY): For every conclusion or claim, you MUST break down:
-             - OBSERVED: What raw data or record was seen.
-             - CONNECTION: What structural link connects these pieces.
-             - SIGNIFICANCE: Why this is meaningful to the investigation.
-             - GAPS: What is still missing or needs verification.
-             This reasoning MUST be provided in the 'reasoning' field of your JSON response.
-          2. REAL LINKS & CITATIONS: You MUST provide real source links for your claims. Use the 'googleSearch' tool to find official archive pages, repository links, or direct record URLs. Populate the 'citations' array with these findings.
-          3. SIGNAL VS NOISE: Prioritize "Strong Signals" (direct records) over "Contextual Noise" (indirect indicators).
-          4. INSTITUTIONAL NORMALIZATION: Always use canonical names (e.g., "NARA" becomes "National Archives and Records Administration").
-          5. NO GUESSING: If a destination or email is unknown, state that you are searching for the most likely office based on institutional process. Do not hallucinate specific people.
+          CORE METHODOLOGY (ODEN):
+          1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
+          2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
+          3. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          4. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
           
-          STATE MANAGEMENT & DEDUPLICATION:
-          - DO NOT create duplicate logs, records, or requests.
-          - If a new finding overlaps with an existing item, use 'update_status', 'update_request', or 'update_evidence'.
-          - MERGE archive requests going to the same institution/department. Preserve distinct record targets inside the merged request.
-          - ARCHIVAL GAPS: If a record *should* exist but is missing, create a 'gap' record in the dossier and a corresponding investigation log.
+          CRITICAL: Use the SEARCH FINDINGS provided to populate your actions. NEVER use placeholder text like "Unnamed", "Unknown", or "Untitled".
           
-          EVIDENCE DOSSIER FIELDS:
-          - 'observed_content': What the source actually contains.
-          - 'why_it_matters': Why this is a meaningful piece of evidence.
-          - 'impact': Supports, Weakens, Complicates, or Leaves Open.
-          - 'strength': Strong, Weak, or Noise.
-          - 'gap_reasoning': For gaps, explain why it should exist and the specific institutional process.
+          FOIA DRAFTING PROTOCOL (STRICT):
+          - Use the specific Record Group (RG), Accession Number, or Office from the search findings.
+          - Body MUST be 3-5 paragraphs of detailed, formal request text.
           
-          INVESTIGATION LOG FIELDS:
-          - 'inference_type': 'Direct' (from record) or 'Inferred' (structural deduction).
-          - 'connection_to_pattern': How this entry links to the broader investigation.
-          - 'verification_needs': What specifically needs to be confirmed.
+          EVIDENCE PROTOCOL (MANDATORY):
+          - 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
+          - 'citation_url' MUST be the direct link to the record or finding.
+          - 'connection_logic' and 'significance' are MANDATORY.
           
-          ACTIONS:
-          - 'add_log': New investigation point.
-          - 'add_evidence': New record for the Dossier.
-          - 'add_request': New FOIA/Archival request.
-          - 'update_request': Modify an existing request (e.g., add new targets to 'body').
-          - 'update_evidence': Modify an existing dossier record.
-          - 'update_status': Change status of a log or request.
+          OUTPUT FORMAT:
+          You MUST return a valid JSON object. Do not include any text outside the JSON.
           
-          TONE: Confident, investigative, natural. No robotic disclaimers. Show the path you took to get there.`,
-          tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              response: { type: Type.STRING, description: "Your natural language response, including inline Markdown links." },
-              reasoning: { type: Type.STRING, description: "Detailed breakdown of OBSERVED, CONNECTION, SIGNIFICANCE, and GAPS." },
-              entities: { type: Type.ARRAY, items: { type: Type.STRING } },
-              citations: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    url: { type: Type.STRING },
-                    institution: { type: Type.STRING }
-                  },
-                  required: ["title", "url"]
-                },
-                description: "List of real source links supporting your response."
+          JSON STRUCTURE EXAMPLE:
+          {
+            "response": "Your investigative analysis...",
+            "reasoning": "Observed: ... Connection: ... Significance: ... Gaps: ...",
+            "entities": ["Entity A", "Entity B"],
+            "citations": [{"title": "Source", "url": "http://...", "institution": "NARA"}],
+            "actions": [
+              {
+                "type": "add_evidence",
+                "data": {
+                  "label": "Evidence Label (e.g. RG 59, Box 12)",
+                  "description": "Contextual Analysis: Why this record matters to the structural investigation...",
+                  "record_type": "Document | Archival Collection | Manuscript",
+                  "observed_content": "Specific details seen in the finding...",
+                  "why_it_matters": "Context...",
+                  "connection_logic": "Structural link to the claim...",
+                  "significance": "Impact on the overall pattern...",
+                  "impact": "Supports | Weakens | Complicates | Leaves Open",
+                  "strength": 5,
+                  "citation": "Source Title",
+                  "citation_url": "http://..."
+                }
               },
-              actions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    type: { type: Type.STRING, enum: ["add_log", "add_evidence", "add_request", "update_request", "update_evidence", "update_status"] },
-                    data: { type: Type.OBJECT },
-                  },
-                  required: ["type", "data"],
-                },
-                nullable: true,
+              {
+                "type": "add_request",
+                "data": {
+                  "title": "FOIA: Specific Records",
+                  "recipient": "FOIA Officer",
+                  "institution_normalized": "National Archives",
+                  "department": "Special Access",
+                  "subject": "Request for RG 59...",
+                  "body": "Formal 3-5 paragraph request...",
+                  "type": "FOIA",
+                  "destination_email": "officer@agency.gov",
+                  "mailing_address": "123 Archive St",
+                  "submission_portal": "https://portal.gov"
+                }
               }
-            },
-            required: ["response", "entities", "reasoning"],
-          },
+            ]
+          }
+          
+          ACTIONS (MUST use the 'data' object):
+          - 'add_log': { name, notes, type, priority, explanation, connection_to_pattern, verification_needs }
+          - 'add_evidence': { label, description, record_type, observed_content, why_it_matters, impact, strength, citation, citation_url, connection_logic, significance, timeline_date }
+          - 'add_request': { title, recipient, institution_normalized, department, subject, body, type, destination_email, mailing_address, submission_portal }
+          - 'add_source': { title, url, institution, type, notes }
+          - 'update_request': { id, body, status }
+          - 'update_evidence': { record_id, ...fields to update }
+          - 'update_status': { id, status, type: 'log' | 'request' }`,
         },
       });
       
-      const result = JSON.parse(response.text || "{}");
+      const rawText = response.text || "{}";
+      const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const result = JSON.parse(cleanJson);
       const aiTimestamp = new Date().toISOString();
       
       // Handle actions
+      let actionSummary = '';
       if (result.actions && result.actions.length > 0) {
+        const counts = { log: 0, evidence: 0, request: 0 };
         result.actions.forEach((action: any) => {
           if (action.type === 'add_log') {
+            counts.log++;
+            const name = action.data.name && !action.data.name.toLowerCase().includes('unnamed') ? action.data.name : 'New Investigation Lead';
             const newPoint: InvestigationItem = {
-              ...action.data,
-              id: Math.random().toString(36).substr(2, 9),
+              id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+              name,
+              notes: action.data.notes || "",
+              type: action.data.type || 'Other',
+              priority: action.data.priority || 'Medium',
               status: 'Pending',
-              createdAt: aiTimestamp
+              explanation: action.data.explanation || "",
+              connection_to_pattern: action.data.connection_to_pattern || "",
+              verification_needs: action.data.verification_needs || "",
+              createdAt: aiTimestamp,
+              ...action.data
             };
             setResearchPoints(prev => [newPoint, ...prev]);
           } else if (action.type === 'add_evidence') {
+            counts.evidence++;
+            const label = action.data.label && !action.data.label.toLowerCase().includes('unnamed') ? action.data.label : 'Evidence Record';
             const newEvidence: EvidenceRecord = {
-              ...action.data,
-              record_id: Math.random().toString(36).substr(2, 9),
+              record_id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+              label: label || action.data.description?.substring(0, 30) || 'Evidence Record',
+              description: action.data.description || action.data.why_it_matters || action.data.observed_content || 'No contextual analysis provided.',
+              record_type: action.data.record_type || 'Other',
               status: action.data.status || 'unverified',
               citation_type: action.data.citation_type || 'none',
               weight: action.data.weight || 5,
               impact: action.data.impact || 'Leaves Open',
-              strength: action.data.strength || 'Noise'
+              strength: action.data.strength || 'Noise',
+              connection_logic: action.data.connection_logic || "",
+              significance: action.data.significance || "",
+              citation: action.data.citation || 'Source Document',
+              citation_url: action.data.citation_url || '',
+              ...action.data
             };
             setData(prev => {
               if (!prev) return { 
@@ -1630,14 +2104,36 @@ function ODENApp() {
               return { ...prev, results: [...prev.results, newEvidence] };
             });
           } else if (action.type === 'add_request') {
+            counts.request++;
+            const subject = action.data.subject || '';
             const newRequest: Request = {
               ...action.data,
+              title: action.data.title || subject || 'New Archive Request',
+              recipient: action.data.recipient || '',
+              subject: subject || 'Archive Request',
+              body: action.data.body || "",
+              type: action.data.type || 'Archival',
+              institution_normalized: action.data.institution_normalized || '',
+              destination_email: action.data.destination_email || '',
+              mailing_address: action.data.mailing_address || '',
+              submission_portal: action.data.submission_portal || action.data.portal_url || '',
               id: Math.random().toString(36).substr(2, 9),
               status: 'Draft',
               createdAt: aiTimestamp,
-              fingerprint: generateFingerprint(action.data.institution_normalized || '', action.data.department || '', action.data.subject || '')
+              fingerprint: generateFingerprint(action.data.institution_normalized || '', action.data.department || '', subject || 'Archive Request')
             };
             addRequest(newRequest);
+          } else if (action.type === 'add_source') {
+            const newSource: Source = {
+              id: Math.random().toString(36).substr(2, 9),
+              title: action.data.title || 'New Source',
+              url: action.data.url || '',
+              institution: action.data.institution || 'Unknown',
+              type: action.data.type || 'Archive',
+              notes: action.data.notes || '',
+              addedAt: aiTimestamp
+            };
+            addSource(newSource);
           } else if (action.type === 'update_request') {
             const { id, body, status } = action.data;
             setRequests(prev => prev.map(r => r.id === id ? { 
@@ -1663,11 +2159,40 @@ function ODENApp() {
             }
           }
         });
+
+        const summaryParts = [];
+        if (counts.request > 0) summaryParts.push(`${counts.request} Archival request${counts.request > 1 ? 's' : ''}`);
+        if (counts.log > 0) summaryParts.push(`${counts.log} research point${counts.log > 1 ? 's' : ''}`);
+        if (counts.evidence > 0) summaryParts.push(`${counts.evidence} evidence record${counts.evidence > 1 ? 's' : ''}`);
+        
+        if (summaryParts.length > 0) {
+          actionSummary = `\n\n[SYSTEM: ${summaryParts.join(' and ')} ${counts.request + counts.log + counts.evidence > 1 ? 'have' : 'has'} been generated.]`;
+        }
+      }
+
+      // Handle citations (Sync to Sources tab)
+      if (result.citations && result.citations.length > 0) {
+        result.citations.forEach((cit: any) => {
+          // Avoid duplicates
+          const exists = sources.some(s => s.url === cit.url);
+          if (!exists) {
+            const newSource: Source = {
+              id: Math.random().toString(36).substr(2, 9),
+              title: cit.title,
+              url: cit.url,
+              institution: cit.institution || 'Unknown',
+              type: 'Archive',
+              notes: `Generated during research on: ${claim || 'General Inquiry'}`,
+              addedAt: aiTimestamp
+            };
+            addSource(newSource);
+          }
+        });
       }
 
       setChatMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: result.response, 
+        content: result.response + actionSummary, 
         reasoning: result.reasoning,
         entities: result.entities,
         timestamp: aiTimestamp,
@@ -1695,7 +2220,25 @@ function ODENApp() {
   const addRequest = (newRequest: Request) => {
     const normalizedInst = normalizeInstitution(newRequest.institution_normalized || '');
     const fingerprint = generateFingerprint(normalizedInst, newRequest.department, newRequest.subject);
-    setRequests(prev => [{ ...newRequest, institution_normalized: normalizedInst, fingerprint }, ...prev]);
+    
+    setRequests(prev => {
+      const existingIndex = prev.findIndex(r => r.fingerprint === fingerprint);
+      if (existingIndex !== -1) {
+        const updated = [...prev];
+        const existing = updated[existingIndex];
+        // Merge bodies if different
+        const newBody = newRequest.body || '';
+        if (existing.body && !existing.body.includes(newBody)) {
+          updated[existingIndex] = {
+            ...existing,
+            body: `${existing.body}\n\n--- AI MERGED UPDATE ---\n${newBody}`,
+            status: 'Draft' // Reset to draft if updated
+          };
+        }
+        return updated;
+      }
+      return [{ ...newRequest, institution_normalized: normalizedInst, fingerprint }, ...prev];
+    });
     setEditingRequest(null);
   };
 
@@ -1790,10 +2333,12 @@ function ODENApp() {
   const handleClearSession = () => {
     setData(null);
     setChatMessages([]);
+    setSuggestionChatMessages([]);
     setRequests([]);
     setSources([]);
     setResearchPoints([]);
     setClaim('');
+    setResearchStep(0);
     setSuggestions({ 
       bridges: [], 
       gaps: [], 
@@ -1829,12 +2374,14 @@ function ODENApp() {
               <option value="pipeline">01 Pipeline</option>
               <option value="dossier">02 Dossier</option>
               <option value="list">03 Records</option>
-              <option value="investigation">04 Log</option>
+              <option value="investigation">04 Research</option>
               <option value="chat">05 Chat</option>
               <option value="requests">06 Requests</option>
               <option value="suggestions">07 Suggestions</option>
-              <option value="sources">08 Sources</option>
-              <option value="data-management">09 Data Management</option>
+              <option value="timeline">08 Timeline</option>
+              <option value="sources">09 Sources</option>
+              <option value="data-management">10 Data Management</option>
+              <option value="settings">11 Settings</option>
             </select>
           </div>
           <div className="hidden md:block">
@@ -1874,13 +2421,25 @@ function ODENApp() {
               onClick={() => setActiveTab('investigation')}
               className={cn("pb-1 border-b-2 transition-all", activeTab === 'investigation' ? "border-black opacity-100" : "border-transparent opacity-30 hover:opacity-100")}
             >
-              04 Log
+              04 Research
             </button>
             <button 
               onClick={() => setActiveTab('sources')}
               className={cn("pb-1 border-b-2 transition-all", activeTab === 'sources' ? "border-black opacity-100" : "border-transparent opacity-30 hover:opacity-100")}
             >
               05 Sources
+            </button>
+            <button 
+              onClick={() => setActiveTab('timeline')}
+              className={cn("pb-1 border-b-2 transition-all", activeTab === 'timeline' ? "border-black opacity-100" : "border-transparent opacity-30 hover:opacity-100")}
+            >
+              06 Timeline
+            </button>
+            <button 
+              onClick={() => setActiveTab('settings')}
+              className={cn("pb-1 border-b-2 transition-all", activeTab === 'settings' ? "border-black opacity-100" : "border-transparent opacity-30 hover:opacity-100")}
+            >
+              11 Settings
             </button>
           </nav>
 
@@ -2183,6 +2742,7 @@ function ODENApp() {
                           <PipelineStep label="04 Primary Source Research" status={researchStep === 4 ? 'loading' : researchStep > 4 ? 'complete' : 'pending'} />
                           <PipelineStep label="05 Record Classification" status={researchStep === 5 ? 'loading' : researchStep > 5 ? 'complete' : 'pending'} />
                           <PipelineStep label="06 Bridge Detection" status={researchStep === 6 ? 'loading' : researchStep > 6 ? 'complete' : 'pending'} />
+                          <PipelineStep label="07 Request Generation" status={researchStep === 7 ? 'loading' : researchStep > 7 ? 'complete' : 'pending'} />
                         </div>
                         <div className="mt-8 pt-8 border-t border-white/10">
                           <div className="flex justify-between items-center">
@@ -2447,6 +3007,9 @@ function ODENApp() {
                           <option value="default">Default</option>
                           <option value="strength">Signal Strength</option>
                           <option value="impact">Impact</option>
+                          <option value="chrono">Chronological</option>
+                          <option value="institutional">Institutional</option>
+                          <option value="verification">Verification Depth</option>
                         </select>
                       </div>
                     </div>
@@ -2544,6 +3107,18 @@ function ODENApp() {
                               const weights = { 'Supports': 3, 'Complicates': 2, 'Leaves Open': 1, 'Weakens': 0 };
                               return (weights[b.impact || 'Leaves Open'] || 0) - (weights[a.impact || 'Leaves Open'] || 0);
                             }
+                            if (dossierSort === 'chrono') {
+                              const dateA = a.timeline_date ? new Date(a.timeline_date).getTime() : 0;
+                              const dateB = b.timeline_date ? new Date(b.timeline_date).getTime() : 0;
+                              return dateA - dateB;
+                            }
+                            if (dossierSort === 'institutional') {
+                              return (a.institution_normalized || '').localeCompare(b.institution_normalized || '');
+                            }
+                            if (dossierSort === 'verification') {
+                              const weights = { 'primary': 3, 'secondary': 2, 'none': 1 };
+                              return (weights[b.citation_type || 'none'] || 0) - (weights[a.citation_type || 'none'] || 0);
+                            }
                             return 0;
                           })
                           .map((record) => (
@@ -2631,6 +3206,19 @@ function ODENApp() {
                             <div className="pt-6 border-t border-black/5 flex justify-between items-center">
                               <span className="text-[9px] font-mono uppercase opacity-40">ID: {record.record_id?.slice(0, 8) || 'Unknown'}</span>
                               <div className="flex gap-2">
+                                {record.status === 'gap' && (
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setChatInput(`Perform a deep dive on this gap: ${record.label}. Focus on ${record.gap_reasoning?.why_should_exist}.`);
+                                      setActiveTab('chat');
+                                    }}
+                                    className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white text-[8px] font-mono uppercase font-bold hover:bg-red-700 transition-all"
+                                  >
+                                    <Zap className="w-3 h-3" />
+                                    Deep Dive
+                                  </button>
+                                )}
                                 <button className="p-2 hover:bg-black/5 transition-all">
                                   <Info className="w-4 h-4" />
                                 </button>
@@ -2775,6 +3363,17 @@ function ODENApp() {
                                   <p className="text-[9px] font-mono uppercase opacity-50 mb-1">Target Location</p>
                                   <p className="text-xs leading-relaxed font-mono">{selectedRecord.gap_reasoning.where_specifically}</p>
                                 </div>
+                                <button 
+                                  onClick={() => {
+                                    setChatInput(`Perform a deep dive on this gap: ${selectedRecord.label}. Focus on ${selectedRecord.gap_reasoning?.why_should_exist}.`);
+                                    setActiveTab('chat');
+                                    setIsSidebarOpen(false);
+                                  }}
+                                  className="w-full bg-red-600 text-white py-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-red-700 transition-all flex items-center justify-center gap-2"
+                                >
+                                  <Zap className="w-4 h-4" />
+                                  Initiate Deep Dive
+                                </button>
                               </section>
                             )}
 
@@ -2821,6 +3420,16 @@ function ODENApp() {
               </motion.div>
             )}
 
+            {activeTab === 'timeline' && (
+              <TimelineView 
+                records={data?.results || []} 
+                onSelectRecord={(r) => {
+                  setSelectedRecord(r);
+                  setIsSidebarOpen(true);
+                }}
+              />
+            )}
+
             {activeTab === 'list' && (
               <motion.div
                 key="list"
@@ -2861,7 +3470,11 @@ function ODENApp() {
                         </thead>
                         <tbody className="text-xs">
                           {data?.results?.map(record => (
-                            <tr key={record.record_id} className="border-b border-black hover:bg-black/5 transition-all">
+                            <tr 
+                              key={record.record_id} 
+                              onClick={() => setViewingRecord(record)}
+                              className="border-b border-black hover:bg-black/5 transition-all cursor-pointer group"
+                            >
                               <td className="p-4 border-r border-black">
                                 <StatusBadge status={record.status} />
                               </td>
@@ -2869,12 +3482,18 @@ function ODENApp() {
                                 {record.record_type}
                               </td>
                               <td className="p-4 border-r border-black">
-                                <p className="font-bold mb-1">{record.label}</p>
+                                <p className="font-bold mb-1 group-hover:underline">{record.label}</p>
                                 <p className="opacity-70 line-clamp-2">{record.description}</p>
                               </td>
                               <td className="p-4 border-r border-black">
                                 {record.citation_url ? (
-                                  <a href={record.citation_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1">
+                                  <a 
+                                    href={record.citation_url} 
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-blue-600 hover:underline flex items-center gap-1"
+                                  >
                                     <ExternalLink className="w-3 h-3" /> {record.citation || 'View Source'}
                                   </a>
                                 ) : (
@@ -2884,7 +3503,10 @@ function ODENApp() {
                               <td className="p-4">
                                 <div className="flex gap-2">
                                   <button 
-                                    onClick={() => setViewingRecord(record)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setViewingRecord(record);
+                                    }}
                                     className="p-2 hover:bg-black hover:text-white transition-all rounded flex items-center gap-2 text-[10px] font-mono uppercase"
                                     title="View Evidence"
                                   >
@@ -3074,9 +3696,9 @@ function ODENApp() {
                   ) : (
                     <div className="grid grid-cols-1 gap-6">
                       {requests.filter(req => 
-                        req.title.toLowerCase().includes(requestSearch.toLowerCase()) ||
-                        req.recipient.toLowerCase().includes(requestSearch.toLowerCase()) ||
-                        req.subject.toLowerCase().includes(requestSearch.toLowerCase())
+                        (req.title || '').toLowerCase().includes((requestSearch || '').toLowerCase()) ||
+                        (req.recipient || '').toLowerCase().includes((requestSearch || '').toLowerCase()) ||
+                        (req.subject || '').toLowerCase().includes((requestSearch || '').toLowerCase())
                       ).map(req => (
                         <div key={req.id} className="border border-black bg-white p-6 relative group">
                           <div className="flex justify-between items-start mb-4">
@@ -3108,24 +3730,80 @@ function ODENApp() {
                             </div>
                           </div>
 
-                          <div className="space-y-2 mb-6">
-                            <p className="text-[10px] font-mono uppercase opacity-50">Recipient: <span className="text-black opacity-100">{req.recipient}</span></p>
-                            {req.institution_normalized && <p className="text-[10px] font-mono uppercase opacity-50">Institution: <span className="text-black opacity-100">{req.institution_normalized}</span></p>}
-                            {req.department && <p className="text-[10px] font-mono uppercase opacity-50">Department: <span className="text-black opacity-100">{req.department}</span></p>}
-                            <p className="text-[10px] font-mono uppercase opacity-50">Subject: <span className="text-black opacity-100">{req.subject}</span></p>
-                            {req.destination_email && <p className="text-[10px] font-mono uppercase opacity-50">Email: <span className="text-black opacity-100">{req.destination_email}</span></p>}
-                            {req.submission_portal && <p className="text-[10px] font-mono uppercase opacity-50">Portal: <a href={req.submission_portal} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{req.submission_portal}</a></p>}
-                            {req.mailing_address && <p className="text-[10px] font-mono uppercase opacity-50">Mailing Address: <span className="text-black opacity-100 italic">{req.mailing_address}</span></p>}
+                          <div className="space-y-3 mb-6 bg-stone-50 p-4 border border-black/5">
+                            <div className="flex justify-between items-center group/field">
+                              <p className="text-[10px] font-mono uppercase opacity-50">Recipient: <span className="text-black opacity-100">{req.recipient}</span></p>
+                              <button onClick={() => { navigator.clipboard.writeText(req.recipient); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
+                            </div>
+                            {req.institution_normalized && (
+                              <div className="flex justify-between items-center group/field">
+                                <p className="text-[10px] font-mono uppercase opacity-50">Institution: <span className="text-black opacity-100">{req.institution_normalized}</span></p>
+                                <button onClick={() => { navigator.clipboard.writeText(req.institution_normalized); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
+                              </div>
+                            )}
+                            {req.department && (
+                              <div className="flex justify-between items-center group/field">
+                                <p className="text-[10px] font-mono uppercase opacity-50">Department: <span className="text-black opacity-100">{req.department}</span></p>
+                                <button onClick={() => { navigator.clipboard.writeText(req.department); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
+                              </div>
+                            )}
+                            <div className="flex justify-between items-center group/field">
+                              <p className="text-[10px] font-mono uppercase opacity-50">Subject: <span className="text-black opacity-100">{req.subject}</span></p>
+                              <button onClick={() => { navigator.clipboard.writeText(req.subject); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
+                            </div>
+                            {req.destination_email && (
+                              <div className="flex justify-between items-center group/field">
+                                <p className="text-xs font-mono uppercase opacity-50">Email: <span className="text-black opacity-100 font-bold">{req.destination_email}</span></p>
+                                <div className="flex gap-2">
+                                  <button onClick={() => { navigator.clipboard.writeText(req.destination_email); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
+                                </div>
+                              </div>
+                            )}
+                            {req.submission_portal && (
+                              <div className="flex justify-between items-center group/field">
+                                <p className="text-[10px] font-mono uppercase opacity-50">Portal: <a href={req.submission_portal} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-bold">{req.submission_portal}</a></p>
+                                <button onClick={() => { navigator.clipboard.writeText(req.submission_portal); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy URL</button>
+                              </div>
+                            )}
+                            {req.mailing_address && (
+                              <div className="flex justify-between items-center group/field">
+                                <p className="text-[10px] font-mono uppercase opacity-50">Mailing Address: <span className="text-black opacity-100 italic">{req.mailing_address}</span></p>
+                                <button onClick={() => { navigator.clipboard.writeText(req.mailing_address); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
+                              </div>
+                            )}
+                            
+                            <div className="mt-4 pt-4 border-t border-black/10">
+                              <div className="flex justify-between items-center mb-2">
+                                <p className="text-[10px] font-mono uppercase opacity-50">Request Body:</p>
+                                <button 
+                                  onClick={() => { navigator.clipboard.writeText(req.body); }}
+                                  className="text-[9px] font-mono uppercase bg-black text-white px-2 py-1 hover:bg-black/80 transition-all"
+                                >
+                                  Copy Full Body
+                                </button>
+                              </div>
+                              <div className="text-[11px] font-serif leading-relaxed opacity-80 whitespace-pre-wrap max-h-40 overflow-y-auto p-2 bg-white border border-black/5">
+                                {req.body}
+                              </div>
+                            </div>
                           </div>
 
                           <div className="flex gap-3">
-                            <a 
-                              href={`mailto:${req.recipient}?subject=${encodeURIComponent(req.subject)}&body=${encodeURIComponent(req.body)}`}
-                              onClick={() => updateRequestStatus(req.id, 'Sent')}
-                              className="flex-1 bg-black text-white p-3 text-center text-[10px] font-mono uppercase font-bold tracking-widest flex items-center justify-center gap-2 hover:bg-black/90 transition-all"
-                            >
-                              <Send className="w-3 h-3" /> Send via Mail Client
-                            </a>
+                            {req.destination_email || req.submission_portal ? (
+                              <a 
+                                href={req.destination_email ? `mailto:${req.destination_email}?subject=${encodeURIComponent(req.subject)}&body=${encodeURIComponent(req.body)}` : req.submission_portal}
+                                target={req.destination_email ? "_self" : "_blank"}
+                                rel={req.destination_email ? "" : "noreferrer"}
+                                onClick={() => updateRequestStatus(req.id, 'Sent')}
+                                className="flex-1 bg-black text-white p-3 text-center text-[10px] font-mono uppercase font-bold tracking-widest flex items-center justify-center gap-2 hover:bg-black/90 transition-all"
+                              >
+                                <Send className="w-3 h-3" /> {req.destination_email ? 'Send via Mail Client' : 'Open Submission Portal'}
+                              </a>
+                            ) : (
+                              <div className="flex-1 bg-stone-100 text-stone-400 p-3 text-center text-[10px] font-mono uppercase font-bold tracking-widest flex items-center justify-center gap-2 border border-black/10 cursor-not-allowed">
+                                <AlertCircle className="w-3 h-3" /> No Contact Info Found
+                              </div>
+                            )}
                             <select 
                               value={req.status}
                               onChange={(e) => updateRequestStatus(req.id, e.target.value as any)}
@@ -3207,8 +3885,8 @@ function ODENApp() {
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {sources.filter(s => {
-                          const matchesSearch = s.title.toLowerCase().includes(sourceSearch.toLowerCase()) || 
-                                               s.notes?.toLowerCase().includes(sourceSearch.toLowerCase());
+                          const matchesSearch = (s.title || '').toLowerCase().includes((sourceSearch || '').toLowerCase()) || 
+                                               s.notes?.toLowerCase().includes((sourceSearch || '').toLowerCase());
                           const matchesFilter = sourceFilter === 'All' || s.type === sourceFilter;
                           return matchesSearch && matchesFilter;
                         }).map(source => (
@@ -3439,6 +4117,15 @@ function ODENApp() {
               </motion.div>
             )}
 
+            {activeTab === 'settings' && (
+              <SettingsView 
+                aiConnected={aiConnected}
+                setAiConnected={setAiConnected}
+                naraApiKey={naraApiKey}
+                setNaraApiKey={setNaraApiKey}
+              />
+            )}
+
             {activeTab === 'investigation' && (
               <motion.div
                 key="investigation"
@@ -3491,8 +4178,8 @@ function ODENApp() {
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       {researchPoints.filter(p => {
-                        const matchesSearch = p.name.toLowerCase().includes(investigationSearch.toLowerCase()) || 
-                                             p.notes.toLowerCase().includes(investigationSearch.toLowerCase());
+                        const matchesSearch = (p.name || '').toLowerCase().includes((investigationSearch || '').toLowerCase()) || 
+                                             (p.notes || '').toLowerCase().includes((investigationSearch || '').toLowerCase());
                         const matchesFilter = investigationFilter === 'All' || p.priority === investigationFilter;
                         return matchesSearch && matchesFilter;
                       }).map(point => (
@@ -4221,10 +4908,88 @@ function ODENApp() {
                         </div>
                       </section>
 
+                      {viewingRecord.observed_content && (
+                        <section>
+                          <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Observed Content</h3>
+                          <div className="p-6 border border-black/10 bg-stone-50 font-mono text-xs leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto custom-scrollbar">
+                            {viewingRecord.observed_content}
+                          </div>
+                        </section>
+                      )}
+
+                      {viewingRecord.connection_logic && (
+                        <section>
+                          <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Structural Connection Logic</h3>
+                          <p className="text-sm leading-relaxed opacity-70 italic">
+                            {viewingRecord.connection_logic}
+                          </p>
+                        </section>
+                      )}
+
+                      {viewingRecord.significance && (
+                        <section>
+                          <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Significance</h3>
+                          <p className="text-sm leading-relaxed opacity-70">
+                            {viewingRecord.significance}
+                          </p>
+                        </section>
+                      )}
+
+                      {viewingRecord.gap_reasoning && (
+                        <section className="p-4 bg-red-50 border border-red-100 rounded-sm">
+                          <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] text-red-800 mb-4">Archival Gap Reasoning</h3>
+                          <div className="space-y-3 text-xs">
+                            <div>
+                              <span className="font-bold block">Why it should exist:</span>
+                              <p className="opacity-70">{viewingRecord.gap_reasoning.why_should_exist}</p>
+                            </div>
+                            <div>
+                              <span className="font-bold block">Where specifically:</span>
+                              <p className="opacity-70">{viewingRecord.gap_reasoning.where_specifically}</p>
+                            </div>
+                            {viewingRecord.gap_reasoning.institutional_process && (
+                              <div>
+                                <span className="font-bold block">Institutional Process:</span>
+                                <p className="opacity-70">{viewingRecord.gap_reasoning.institutional_process}</p>
+                              </div>
+                            )}
+                          </div>
+                        </section>
+                      )}
+
+                      {viewingRecord.expected_location && (
+                        <section>
+                          <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Expected Location</h3>
+                          <p className="text-sm leading-relaxed opacity-70">
+                            {viewingRecord.expected_location}
+                          </p>
+                        </section>
+                      )}
+
+                      {viewingRecord.research_preview && (
+                        <section>
+                          <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Research Preview</h3>
+                          <p className="text-sm leading-relaxed opacity-70 italic">
+                            {viewingRecord.research_preview}
+                          </p>
+                        </section>
+                      )}
+
+                      {viewingRecord.entities && viewingRecord.entities.length > 0 && (
+                        <section>
+                          <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Linked Entities</h3>
+                          <div className="flex flex-wrap gap-2">
+                            {viewingRecord.entities.map((ent, idx) => (
+                              <span key={idx} className="text-[10px] font-mono bg-black/5 px-2 py-1 border border-black/10">{ent}</span>
+                            ))}
+                          </div>
+                        </section>
+                      )}
+
                       {viewingRecord.raw_result && (
                         <section>
                           <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Raw Research Data</h3>
-                          <div className="p-6 border border-black/10 bg-stone-50 font-mono text-xs leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto custom-scrollbar">
+                          <div className="p-6 border border-black/10 bg-stone-50 font-mono text-[10px] leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto custom-scrollbar opacity-50">
                             {viewingRecord.raw_result}
                           </div>
                         </section>
@@ -4234,6 +4999,12 @@ function ODENApp() {
                     <div className="space-y-8">
                       <section>
                         <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Source Attribution</h3>
+                        {viewingRecord.timeline_date && (
+                          <div className="flex items-center gap-2 mb-4 p-2 bg-stone-50 border border-black/5">
+                            <Calendar className="w-3 h-3 opacity-40" />
+                            <span className="text-[10px] font-mono font-bold uppercase tracking-wider">{viewingRecord.timeline_date}</span>
+                          </div>
+                        )}
                         {viewingRecord.citation_url ? (
                           <a 
                             href={viewingRecord.citation_url} 
@@ -4250,6 +5021,35 @@ function ODENApp() {
                         ) : (
                           <p className="text-xs opacity-40 italic">No primary source URL attached.</p>
                         )}
+                      </section>
+
+                      <section>
+                        <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-30 mb-4">Structural Impact</h3>
+                        {viewingRecord.classification && (
+                          <div className="mb-4">
+                            <span className={cn(
+                              "text-[9px] font-mono font-bold uppercase px-2 py-1 border block text-center",
+                              viewingRecord.classification === 'verified' ? "border-green-600 text-green-600 bg-green-50" :
+                              viewingRecord.classification === 'contested' ? "border-red-600 text-red-600 bg-red-50" :
+                              "border-stone-400 text-stone-400 bg-stone-50"
+                            )}>{viewingRecord.classification}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className={cn(
+                            "text-[10px] font-mono font-bold uppercase px-2 py-0.5 border",
+                            viewingRecord.impact === 'Supports' ? "bg-green-50 text-green-800 border-green-200" :
+                            viewingRecord.impact === 'Weakens' ? "bg-red-50 text-red-800 border-red-200" :
+                            viewingRecord.impact === 'Complicates' ? "bg-purple-50 text-purple-800 border-purple-200" :
+                            "bg-gray-50 text-gray-800 border-gray-200"
+                          )}>{viewingRecord.impact || 'Leaves Open'}</span>
+                          <span className={cn(
+                            "text-[10px] font-mono font-bold uppercase px-2 py-0.5 border",
+                            viewingRecord.strength === 'Strong' ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
+                            viewingRecord.strength === 'Weak' ? "bg-orange-50 text-orange-800 border-orange-200" :
+                            "bg-gray-50 text-gray-800 border-gray-200"
+                          )}>{viewingRecord.strength || 'Noise'}</span>
+                        </div>
                       </section>
 
                       <section>
@@ -5053,13 +5853,6 @@ function ODENApp() {
       {isMobile && (
         <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-black z-50 flex justify-around items-center h-16 px-2 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
           <button 
-            onClick={() => setActiveTab('pipeline')}
-            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'pipeline' ? "text-black" : "text-black/30")}
-          >
-            <Search className="w-5 h-5" />
-            <span className="text-[8px] font-mono uppercase font-bold">Search</span>
-          </button>
-          <button 
             onClick={() => setActiveTab('dossier')}
             className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'dossier' ? "text-black" : "text-black/30")}
           >
@@ -5070,8 +5863,22 @@ function ODENApp() {
             onClick={() => setActiveTab('chat')}
             className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'chat' ? "text-black" : "text-black/30")}
           >
-            <History className="w-5 h-5" />
-            <span className="text-[8px] font-mono uppercase font-bold">Log</span>
+            <MessageSquare className="w-5 h-5" />
+            <span className="text-[8px] font-mono uppercase font-bold">Chat</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('timeline')}
+            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'timeline' ? "text-black" : "text-black/30")}
+          >
+            <Calendar className="w-5 h-5" />
+            <span className="text-[8px] font-mono uppercase font-bold">Timeline</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('suggestions')}
+            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'suggestions' ? "text-black" : "text-black/30")}
+          >
+            <Sparkles className="w-5 h-5" />
+            <span className="text-[8px] font-mono uppercase font-bold">AI</span>
           </button>
           <button 
             onClick={() => setActiveTab('requests')}
@@ -5080,23 +5887,87 @@ function ODENApp() {
             <Mail className="w-5 h-5" />
             <span className="text-[8px] font-mono uppercase font-bold">FOIA</span>
           </button>
-          <button 
-            onClick={() => setActiveTab('data-management')}
-            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'data-management' ? "text-black" : "text-black/30")}
-          >
-            <Cloud className="w-5 h-5" />
-            <span className="text-[8px] font-mono uppercase font-bold">Data</span>
-          </button>
-          <button 
-            onClick={() => setActiveTab('investigation')}
-            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'investigation' ? "text-black" : "text-black/30")}
-          >
-            <List className="w-5 h-5" />
-            <span className="text-[8px] font-mono uppercase font-bold">Investigation</span>
-          </button>
         </nav>
       )}
     </div>
+  );
+}
+
+function TimelineView({ records, onSelectRecord }: { records: EvidenceRecord[], onSelectRecord: (r: EvidenceRecord) => void }) {
+  const timelineRecords = records
+    .filter(r => r.timeline_date)
+    .sort((a, b) => new Date(a.timeline_date!).getTime() - new Date(b.timeline_date!).getTime());
+
+  if (timelineRecords.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-stone-50">
+        <Calendar className="w-12 h-12 opacity-20 mb-4" />
+        <h3 className="text-xl font-serif italic mb-2">No Temporal Data Found.</h3>
+        <p className="text-sm opacity-60 max-w-md leading-relaxed">
+          The current dossier does not contain records with verified dates. Use the Research Strategist to identify specific dates for your evidence.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="h-full overflow-y-auto bg-stone-50 p-6 md:p-12"
+    >
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-12 border-b border-black pb-8">
+          <h2 className="text-4xl font-serif italic mb-2">Research Timeline</h2>
+          <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Chronological Reconstruction of Institutional Activity</p>
+        </div>
+
+        <div className="relative border-l-2 border-black ml-4 md:ml-8 pl-8 md:pl-12 space-y-16 pb-24">
+          {timelineRecords.map((record, index) => {
+            const isAnomaly = record.status === 'gap' || record.classification === 'contested';
+            return (
+              <div key={record.record_id} className="relative group">
+                {/* Timeline Dot */}
+                <div className={cn(
+                  "absolute -left-[41px] md:-left-[57px] top-0 w-4 h-4 rounded-full border-2 border-black transition-all group-hover:scale-125 z-10",
+                  isAnomaly ? "bg-red-600 animate-pulse" : "bg-white"
+                )} />
+                
+                {/* Date Label */}
+                <div className="absolute -left-[120px] md:-left-[160px] top-0 w-24 md:w-32 text-right">
+                  <span className="text-[10px] font-mono uppercase font-bold tracking-tighter opacity-40">
+                    {new Date(record.timeline_date!).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                  </span>
+                </div>
+
+                <motion.div 
+                  whileHover={{ x: 4 }}
+                  onClick={() => onSelectRecord(record)}
+                  className={cn(
+                    "p-6 border border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all cursor-pointer",
+                    isAnomaly && "border-red-600 bg-red-50/30"
+                  )}
+                >
+                  <div className="flex justify-between items-start mb-4">
+                    <StatusBadge status={record.status} />
+                    <span className="text-[9px] font-mono uppercase opacity-40">{record.record_type}</span>
+                  </div>
+                  <h4 className="font-serif italic text-xl mb-2">{record.label}</h4>
+                  <p className="text-xs opacity-70 leading-relaxed line-clamp-2 mb-4">{record.description}</p>
+                  
+                  {isAnomaly && (
+                    <div className="flex items-center gap-2 text-[9px] font-mono uppercase text-red-600 font-bold">
+                      <AlertTriangle className="w-3 h-3" />
+                      <span>Anomaly Detected: {record.status === 'gap' ? 'Archival Gap' : 'Contested Record'}</span>
+                    </div>
+                  )}
+                </motion.div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -5135,5 +6006,150 @@ function LegendItem({ color, label }: { color: string, label: string }) {
       <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
       <span className="text-[9px] font-mono uppercase text-white/50">{label}</span>
     </div>
+  );
+}
+
+function SettingsView({ 
+  aiConnected, 
+  setAiConnected,
+  naraApiKey, 
+  setNaraApiKey 
+}: { 
+  aiConnected: boolean, 
+  setAiConnected: (val: boolean) => void,
+  naraApiKey: string, 
+  setNaraApiKey: (val: string) => void 
+}) {
+  const [showNaraKey, setShowNaraKey] = useState(false);
+
+  const handleConnectAI = async () => {
+    if (window.aistudio?.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      setAiConnected(true);
+    }
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="h-full overflow-y-auto bg-stone-50 p-6 md:p-12"
+    >
+      <div className="max-w-4xl mx-auto space-y-12">
+        <div className="mb-12 border-b border-black pb-8">
+          <h2 className="text-4xl font-serif italic mb-2">System Settings</h2>
+          <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">API Configuration & External Connections</p>
+        </div>
+
+        {/* AI Connection */}
+        <section className="p-8 border border-black bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+          <div className="flex justify-between items-start mb-6">
+            <div className="flex items-center gap-3">
+              <div className={cn("w-3 h-3 rounded-full", aiConnected ? "bg-green-500 animate-pulse" : "bg-blue-500")} />
+              <h3 className="text-xl font-serif italic">AI Research Engine (Gemini)</h3>
+            </div>
+            <span className={cn(
+              "text-[9px] font-mono uppercase px-2 py-1 border",
+              aiConnected ? "bg-green-50 text-green-700 border-green-200" : "bg-blue-50 text-blue-700 border-blue-200"
+            )}>
+              {aiConnected ? "Custom Engine Connected" : "Default Engine Active"}
+            </span>
+          </div>
+          
+          <p className="text-sm opacity-70 leading-relaxed mb-8">
+            The AI Research Engine powers the deep-dive analysis, pattern recognition, and automated dossier building. 
+            By default, ODEN uses a shared research engine. <strong>You do not need to change this</strong> unless you want to use your own Google Cloud project limits.
+          </p>
+
+          <div className="bg-stone-50 p-6 border border-black/10 mb-8">
+            <h4 className="text-[10px] font-mono uppercase font-bold mb-2 flex items-center gap-2">
+              <Info className="w-3 h-3" /> Optional: Use Your Own Key
+            </h4>
+            <p className="text-xs opacity-60 leading-relaxed">
+              If you run out of "free tokens" or want faster, private processing, you can connect your own API key. 
+              This is strictly an <strong>extra option</strong> for power users and researchers with high-volume data needs.
+            </p>
+          </div>
+
+          <button 
+            onClick={handleConnectAI}
+            className="w-full bg-black text-white py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all flex items-center justify-center gap-2"
+          >
+            <Sparkles className="w-4 h-4" />
+            {aiConnected ? "Reconnect AI Engine" : "Connect AI Engine"}
+          </button>
+        </section>
+
+        {/* NARA Connection */}
+        <section className="p-8 border border-black bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+          <div className="flex justify-between items-start mb-6">
+            <div className="flex items-center gap-3">
+              <div className={cn("w-3 h-3 rounded-full", naraApiKey ? "bg-green-500" : "bg-stone-300")} />
+              <h3 className="text-xl font-serif italic">National Archives (NARA) API</h3>
+            </div>
+            <span className={cn(
+              "text-[9px] font-mono uppercase px-2 py-1 border",
+              naraApiKey ? "bg-green-50 text-green-700 border-green-200" : "bg-stone-50 text-stone-700 border-stone-200"
+            )}>
+              {naraApiKey ? "Key Active" : "No Key Found"}
+            </span>
+          </div>
+
+          <p className="text-sm opacity-70 leading-relaxed mb-8">
+            Connecting to the National Archives API allows ODEN to pull official finding aids, Record Group descriptions, and digital file metadata directly from the source.
+          </p>
+
+          <div className="space-y-4 mb-8">
+            <div className="relative">
+              <label className="text-[9px] font-mono uppercase opacity-50 mb-1 block">NARA API Key</label>
+              <div className="relative">
+                <input 
+                  type={showNaraKey ? "text" : "password"}
+                  value={naraApiKey}
+                  onChange={(e) => setNaraApiKey(e.target.value)}
+                  placeholder="Enter your NARA API key..."
+                  className="w-full bg-stone-50 border border-black/20 p-4 text-xs font-mono focus:outline-none focus:border-black transition-all pr-12"
+                />
+                <button 
+                  onClick={() => setShowNaraKey(!showNaraKey)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30 hover:opacity-100 transition-all"
+                >
+                  {showNaraKey ? <X className="w-4 h-4" /> : <HelpCircle className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            <p className="text-[10px] opacity-50 italic">
+              Your key is stored locally in your browser and is never sent to our servers.
+            </p>
+          </div>
+
+          <div className="bg-stone-50 p-6 border border-black/10">
+            <h4 className="text-[10px] font-mono uppercase font-bold mb-2 flex items-center gap-2">
+              <Building2 className="w-3 h-3" /> Why use a NARA Key?
+            </h4>
+            <p className="text-xs opacity-60 leading-relaxed">
+              Without a key, the system relies on general web searches. With a key, the AI can "speak" directly to the National Archives database, 
+              finding specific box numbers and folder titles that aren't indexed on the public web.
+            </p>
+            <a 
+              href="https://github.com/usnationalarchives/catalog-api" 
+              target="_blank" 
+              rel="noreferrer"
+              className="text-[10px] font-mono text-blue-600 hover:underline mt-4 inline-block"
+            >
+              Get a NARA API Key →
+            </a>
+          </div>
+        </section>
+
+        {/* Security Note */}
+        <div className="p-6 border border-dashed border-black/20 text-center">
+          <Shield className="w-6 h-6 mx-auto mb-3 opacity-20" />
+          <p className="text-[10px] font-mono uppercase tracking-widest opacity-40">
+            All research data and API keys are stored locally. ODEN does not maintain a central database of your investigations.
+          </p>
+        </div>
+      </div>
+    </motion.div>
   );
 }

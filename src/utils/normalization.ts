@@ -1,6 +1,6 @@
 
-export function normalizeInstitution(name: string): string {
-  const n = name.toLowerCase().trim();
+export function normalizeInstitution(name: string = ''): string {
+  const n = (name || '').toLowerCase().trim();
   if (n.includes('nara') || n.includes('national archives')) return 'National Archives and Records Administration (NARA)';
   if (n.includes('cia') || n.includes('central intelligence')) return 'Central Intelligence Agency (CIA)';
   if (n.includes('fbi') || n.includes('federal bureau')) return 'Federal Bureau of Investigation (FBI)';
@@ -10,12 +10,12 @@ export function normalizeInstitution(name: string): string {
   if (n.includes('nysa') || n.includes('new york state archives')) return 'New York State Archives (NYSA)';
   if (n.includes('archives ontario')) return 'Archives of Ontario';
   if (n.includes('national archives uk') || n.includes('tna')) return 'The National Archives (UK)';
-  return name;
+  return name || '';
 }
 
-export function generateFingerprint(institution: string, department: string = '', subject: string = ''): string {
+export function generateFingerprint(institution: string = '', department: string = '', subject: string = ''): string {
   const normalized = normalizeInstitution(institution);
-  const base = `${normalized}|${department.toLowerCase().trim()}|${subject.toLowerCase().trim()}`;
+  const base = `${normalized}|${(department || '').toLowerCase().trim()}|${(subject || '').toLowerCase().trim()}`;
   // Simple hash for fingerprinting
   let hash = 0;
   for (let i = 0; i < base.length; i++) {

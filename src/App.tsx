@@ -75,6 +75,7 @@ export default function App() {
 }
 
 function ODENApp() {
+  const [isLoaded, setIsLoaded] = useState(false);
   const [researchStep, setResearchStep] = useState<number>(0);
   const [claim, setClaim] = useState('');
   const [loading, setLoading] = useState(false);
@@ -225,13 +226,7 @@ function ODENApp() {
       }
     };
     checkAI();
-  }, []);
 
-  useEffect(() => {
-    localStorage.setItem('oden_nara_key', naraApiKey);
-  }, [naraApiKey]);
-
-  useEffect(() => {
     const saved = localStorage.getItem('oden_session');
     if (saved) {
       try {
@@ -250,14 +245,23 @@ function ODENApp() {
         if (parsed.dossierFilter) setDossierFilter(parsed.dossierFilter);
         if (parsed.investigationFilter) setInvestigationFilter(parsed.investigationFilter);
         if (parsed.sourceFilter) setSourceFilter(parsed.sourceFilter);
+        if (parsed.uploadedFiles) setUploadedFiles(parsed.uploadedFiles);
+        if (parsed.strategistFeed) setStrategistFeed(parsed.strategistFeed);
       } catch (e) {
         console.error("Failed to load session", e);
       }
     }
+    setIsLoaded(true);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('oden_nara_key', naraApiKey);
+  }, [naraApiKey]);
 
   // Auto-save to LocalStorage
   useEffect(() => {
+    if (!isLoaded) return;
+
     const session = {
       data,
       chatMessages,
@@ -272,10 +276,13 @@ function ODENApp() {
       dossierSort,
       dossierFilter,
       investigationFilter,
-      sourceFilter
+      sourceFilter,
+      uploadedFiles,
+      strategistFeed
     };
     localStorage.setItem('oden_session', JSON.stringify(session));
   }, [
+    isLoaded,
     data, 
     chatMessages, 
     requests, 
@@ -289,7 +296,9 @@ function ODENApp() {
     dossierSort,
     dossierFilter,
     investigationFilter,
-    sourceFilter
+    sourceFilter,
+    uploadedFiles,
+    strategistFeed
   ]);
 
   const downloadChatLog = () => {
@@ -383,12 +392,14 @@ function ODENApp() {
     const genAI = getGenAI();
     const response = await genAI.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `You are a structural evidence mapper for the ODEN Research System. Given a neutralized research claim, generate the institutional evidence checklist — the complete list of record types, documents, communications, and physical traces that must exist if this claim is structurally true. 
+      contents: `You are a structural evidence mapper and Investigative Partner for the ODEN Research System. Given a neutralized research claim, generate the institutional evidence checklist — the complete list of record types, documents, communications, and physical traces that must exist if this claim is structurally true. 
       Testable form: "${testableForm}"
       
       CRITICAL: NEVER use placeholder text like "Unnamed Record" or "Unknown Location". Use Google Search to identify the EXACT archives, government agencies, or record-keeping bodies relevant to this specific claim.
       
       FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows) that would leave institutional traces. These are the structural pillars of any institutional pattern.
+      
+      INVESTIGATIVE STRATEGY: Provide strategic advice on how to approach these records. What are the potential obstacles? What secondary sources might provide context?
       
       Output ONLY valid JSON: { "checklist": [{ "item_id": string, "description": string, "expected_location": string, "priority": "high" | "medium" | "low" }] }. 
       Limit to the 5-7 most critical institutional records.`,
@@ -427,7 +438,7 @@ function ODENApp() {
     const response = await genAI.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: [
-        { parts: [{ text: `You are an ODEN Primary Source Researcher. Your task is to investigate a specific checklist item strictly against primary sources and user-provided data.
+        { parts: [{ text: `You are an ODEN Investigative Partner and Research Assistant. Your task is to investigate a specific checklist item strictly against primary sources and user-provided data, while providing strategic context for the broader investigation.
       
       ITEM TO RESEARCH:
       ID: ${item.item_id}
@@ -441,13 +452,13 @@ function ODENApp() {
       METHODOLOGY CONSTRAINTS:
       1. PRIMARY SOURCES ONLY for verification.
       2. USER UPLOADED DATA: Prioritize user notes.
-      3. SECONDARY SOURCES: Inform search only.
+      3. SECONDARY SOURCES: Inform search and provide research context.
       4. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows).
-      5. REASONING DEPTH: Observed, Connection, Significance.
+      5. REASONING DEPTH: Observed, Connection, Significance, Crossover Analysis.
       6. SIGNAL VS NOISE: Distinguish support from context.
       7. ENTITY RECOGNITION: Identify real people, agencies, and dates.
       8. INSTITUTION NORMALIZATION: Use canonical names.
-      9. NUANCED INTERPRETATION: Use speculative language for theories.
+      9. INVESTIGATIVE NARRATIVE: Use natural, engaging language to describe findings and their significance.
       10. REAL LINKS: Provide specific, working URLs.
       
       Use Google Search to find the specific record at the expected location.
@@ -942,14 +953,17 @@ function ODENApp() {
         
         USER QUESTION: "${message}"`,
         config: {
-          systemInstruction: `You are the ODEN Research Strategist, a high-level investigative partner. You are NOT a clinical program; you are a collaborator in a deep-dive investigation.
+          systemInstruction: `You are the ODEN Investigative Partner and Research Assistant. You are NOT a clinical program; you are a collaborator in a deep-dive investigation. Your tone should be natural, engaging, and narrative-driven, not just a list of facts.
           
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
           3. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows). These are the structural pillars of any institutional pattern.
-          4. ACKNOWLEDGE HISTORY: Look at the CHAT HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
-          5. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
+          4. STRATEGIC COLLABORATION: Act as a research assistant. Discuss theories, suggest research paths, and provide context beyond just record fetching. If the user is brainstorming, engage in the discussion without always needing to trigger a new record or action.
+          5. ACKNOWLEDGE HISTORY: Look at the CHAT HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          6. INVESTIGATIVE NARRATIVE: Open with a narrative assessment of the findings (e.g., "This is a genuinely fascinating and frustrating record gap"). Synthesize information into thematic sections (e.g., "The Scale," "The Institutional Response," "What Actually Survives").
+          7. CROSSOVER ANALYSIS: Explicitly point out personnel crossovers (dual roles) and financial crossovers (inter-agency fund flows).
+          8. STRUCTURAL PROBLEM CONCLUSION: Map findings back to the core methodology—explaining how the record destruction or absence fits into a system built for untraceability.
           
           STATE MANAGEMENT & DEDUPLICATION:
           - DO NOT create duplicate logs, records, or requests.
@@ -958,9 +972,14 @@ function ODENApp() {
           
           CRITICAL: Use the SEARCH FINDINGS provided to populate your actions. NEVER use placeholder text like "Unnamed", "Unknown", or "Untitled".
           
-          FOIA DRAFTING PROTOCOL (STRICT):
-          - Use the specific Record Group (RG), Accession Number, or Office from the search findings.
-          - Body MUST be 3-5 paragraphs of detailed, formal request text.
+          INSTITUTIONAL ROUTING & DRAFTING PROTOCOL (STRICT):
+          1. IDENTIFY THE STATE: Determine if the record is an active agency record (FOIA), a declassification target (MDR), or an archival record (Archival Pull/Accession Inquiry).
+          2. TARGET THE DESK: Use specific contact emails for the relevant desk (e.g., "NARA Textual Reference", "Special Access & FOIA Staff", "Museum Registrar", "Departmental Archivist").
+          3. DRAFT THE BODY: Provide a 3-5 paragraph formal request tailored to the specific type. 
+             - Archival Inquiries should reference specific Box/Folder/Entry numbers and ask for pull instructions.
+             - FOIA requests should reference the FOIA statute (5 U.S.C. § 552).
+             - Museum Inquiries should reference specific artifacts or accession numbers.
+          4. NO PLACEHOLDERS: Use the specific Record Group (RG), Accession Number, or Office from the search findings.
           
           EVIDENCE PROTOCOL (MANDATORY):
           - 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
@@ -972,8 +991,8 @@ function ODENApp() {
           
           JSON STRUCTURE EXAMPLE:
           {
-            "response": "Your investigative analysis...",
-            "reasoning": "Observed: ... Connection: ... Significance: ... Gaps: ...",
+            "response": "Your investigative analysis (narrative, engaging, and context-rich)...",
+            "reasoning": "Observed: ... Connection: ... Significance: ... Gaps: ... Crossover Analysis: ...",
             "entities": ["Entity A", "Entity B"],
             "citations": [{"title": "Source", "url": "http://...", "institution": "NARA"}],
             "actions": [
@@ -996,16 +1015,16 @@ function ODENApp() {
               {
                 "type": "add_request",
                 "data": {
-                  "title": "FOIA: Specific Records",
-                  "recipient": "FOIA Officer",
+                  "title": "Archival Inquiry: RG 59 Box 12",
+                  "recipient": "NARA Textual Reference",
                   "institution_normalized": "National Archives",
-                  "department": "Special Access",
-                  "subject": "Request for RG 59...",
-                  "body": "Formal 3-5 paragraph request...",
-                  "type": "FOIA",
-                  "destination_email": "officer@agency.gov",
-                  "mailing_address": "123 Archive St",
-                  "submission_portal": "https://portal.gov"
+                  "department": "Textual Records",
+                  "subject": "Inquiry regarding RG 59, Entry 10, Box 12",
+                  "body": "Detailed 3-5 paragraph inquiry referencing specific archival identifiers...",
+                  "type": "Archival",
+                  "destination_email": "archives2reference@nara.gov",
+                  "mailing_address": "8601 Adelphi Road, College Park, MD",
+                  "submission_portal": null
                 }
               }
             ]
@@ -2072,20 +2091,28 @@ function ODENApp() {
           { parts: [{ text: `CONTEXT:\n${filesContext}${dataContext}${sourcesContext}${investigationContext}${requestsContext}${historyContext}\n\nSEARCH FINDINGS:\n${discoveryFindings}\n\nCURRENT INQUIRY: ${userMsg}` }] }
         ],
         config: {
-          systemInstruction: `You are the ODEN Structural Intelligence Engine, a high-level investigative partner. You are NOT a clinical program; you are a collaborator in a deep-dive investigation.
+          systemInstruction: `You are the ODEN Investigative Partner and Research Assistant. You are NOT a clinical program; you are a collaborator in a deep-dive investigation. Your tone should be natural, engaging, and narrative-driven, not just a list of facts.
           
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
           3. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows). These are the structural pillars of any institutional pattern.
-          4. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
-          5. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
+          4. STRATEGIC COLLABORATION: Act as a research assistant. Discuss theories, suggest research paths, and provide context beyond just record fetching. If the user is brainstorming, engage in the discussion without always needing to trigger a new record or action.
+          5. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          6. INVESTIGATIVE NARRATIVE: Open with a narrative assessment of the findings (e.g., "This is a genuinely fascinating and frustrating record gap"). Synthesize information into thematic sections (e.g., "The Scale," "The Institutional Response," "What Actually Survives").
+          7. CROSSOVER ANALYSIS: Explicitly point out personnel crossovers (dual roles) and financial crossovers (inter-agency fund flows).
+          8. STRUCTURAL PROBLEM CONCLUSION: Map findings back to the core methodology—explaining how the record destruction or absence fits into a system built for untraceability.
           
           CRITICAL: Use the SEARCH FINDINGS provided to populate your actions. NEVER use placeholder text like "Unnamed", "Unknown", or "Untitled".
           
-          FOIA DRAFTING PROTOCOL (STRICT):
-          - Use the specific Record Group (RG), Accession Number, or Office from the search findings.
-          - Body MUST be 3-5 paragraphs of detailed, formal request text.
+          INSTITUTIONAL ROUTING & DRAFTING PROTOCOL (STRICT):
+          1. IDENTIFY THE STATE: Determine if the record is an active agency record (FOIA), a declassification target (MDR), or an archival record (Archival Pull/Accession Inquiry).
+          2. TARGET THE DESK: Use specific contact emails for the relevant desk (e.g., "NARA Textual Reference", "Special Access & FOIA Staff", "Museum Registrar", "Departmental Archivist").
+          3. DRAFT THE BODY: Provide a 3-5 paragraph formal request tailored to the specific type. 
+             - Archival Inquiries should reference specific Box/Folder/Entry numbers and ask for pull instructions.
+             - FOIA requests should reference the FOIA statute (5 U.S.C. § 552).
+             - Museum Inquiries should reference specific artifacts or accession numbers.
+          4. NO PLACEHOLDERS: Use the specific Record Group (RG), Accession Number, or Office from the search findings.
           
           EVIDENCE PROTOCOL (MANDATORY):
           - 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
@@ -2097,8 +2124,8 @@ function ODENApp() {
           
           JSON STRUCTURE EXAMPLE:
           {
-            "response": "Your investigative analysis...",
-            "reasoning": "Observed: ... Connection: ... Significance: ... Gaps: ...",
+            "response": "Your investigative analysis (narrative, engaging, and context-rich)...",
+            "reasoning": "Observed: ... Connection: ... Significance: ... Gaps: ... Crossover Analysis: ...",
             "entities": ["Entity A", "Entity B"],
             "citations": [{"title": "Source", "url": "http://...", "institution": "NARA"}],
             "actions": [
@@ -2140,16 +2167,16 @@ function ODENApp() {
               {
                 "type": "add_request",
                 "data": {
-                  "title": "FOIA: Specific Records",
-                  "recipient": "FOIA Officer",
+                  "title": "Archival Inquiry: RG 59 Box 12",
+                  "recipient": "NARA Textual Reference",
                   "institution_normalized": "National Archives",
-                  "department": "Special Access",
-                  "subject": "Request for RG 59...",
-                  "body": "Formal 3-5 paragraph request...",
-                  "type": "FOIA",
-                  "destination_email": "officer@agency.gov",
-                  "mailing_address": "123 Archive St",
-                  "submission_portal": "https://portal.gov"
+                  "department": "Textual Records",
+                  "subject": "Inquiry regarding RG 59, Entry 10, Box 12",
+                  "body": "Detailed 3-5 paragraph inquiry referencing specific archival identifiers...",
+                  "type": "Archival",
+                  "destination_email": "archives2reference@nara.gov",
+                  "mailing_address": "8601 Adelphi Road, College Park, MD",
+                  "submission_portal": null
                 }
               }
             ]
@@ -3740,7 +3767,7 @@ function ODENApp() {
                 className="h-full flex flex-col p-4 md:p-8"
               >
                 <div className="flex justify-between items-end mb-6 border-b border-black pb-4">
-                  <h2 className="text-3xl font-serif italic">Research Log</h2>
+                  <h2 className="text-3xl font-serif italic">Investigative Partner</h2>
                   <div className="flex gap-2">
                     <button 
                       onClick={downloadChatLog}
@@ -3756,7 +3783,7 @@ function ODENApp() {
                   {chatMessages.length === 0 && (
                     <div className="h-full flex flex-col items-center justify-center opacity-20 text-center">
                       <HelpCircle className="w-16 h-16 mb-4" />
-                      <p className="font-serif italic text-xl">Direct Inquiry Mode. Ask for structural deep-dives.</p>
+                      <p className="font-serif italic text-xl">Direct Inquiry Mode. Your Investigative Partner is ready for strategy or deep-dives.</p>
                     </div>
                   )}
                   {chatMessages.map((msg, i) => (
@@ -3766,7 +3793,7 @@ function ODENApp() {
                         msg.role === 'user' ? "bg-black text-white border-black shadow-lg" : "bg-white border-black"
                       )}>
                         <div className="flex justify-between items-end mb-1 gap-4">
-                          <p className="text-[9px] font-mono uppercase opacity-50">{msg.role === 'user' ? 'Inquirer' : 'ODEN System'}</p>
+                          <p className="text-[9px] font-mono uppercase opacity-50">{msg.role === 'user' ? 'Inquirer' : 'Investigative Partner'}</p>
                           {msg.timestamp && (
                             <p className="text-[8px] font-mono opacity-30">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                           )}
@@ -3851,7 +3878,7 @@ function ODENApp() {
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Ask for deep-dives or FOIA templates..."
+                    placeholder="Ask for research strategy, deep-dives, or FOIA templates..."
                     className="flex-1 bg-transparent border border-black p-4 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
                     onKeyDown={(e) => e.key === 'Enter' && handleChat()}
                   />

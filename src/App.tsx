@@ -1,15 +1,131 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, createContext, useContext } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud, Calendar, Link as LinkIcon } from 'lucide-react';
+import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud, Calendar, Link as LinkIcon, LogIn, LogOut, FolderOpen, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { normalizeInstitution, generateFingerprint } from "./utils/normalization";
-import { ResearchResponse, EvidenceRecord, BridgeCandidate, Request, Source, ChatMessage, InvestigationItem, SubClaim, Suggestions } from './types';
+import { ResearchResponse, EvidenceRecord, BridgeCandidate, Request, Source, ChatMessage, InvestigationItem, SubClaim, Suggestions, Investigation, UserProfile } from './types';
+import { auth, db, googleProvider, signInWithPopup, onAuthStateChanged, doc, setDoc, getDoc, onSnapshot, User, FirestoreError, collection, query, where, getDocs, addDoc, updateDoc, arrayUnion, arrayRemove } from './firebase';
+import { serverTimestamp, Timestamp } from 'firebase/firestore';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+// --- Firebase Error Handling ---
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// --- Firebase Context ---
+interface FirebaseContextType {
+  user: User | null;
+  loading: boolean;
+  isGuest: boolean;
+  signIn: () => Promise<void>;
+  signOut: () => Promise<void>;
+  continueAsGuest: () => void;
+}
+
+const FirebaseContext = createContext<FirebaseContextType | undefined>(undefined);
+
+function FirebaseProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [isGuest, setIsGuest] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      if (user) setIsGuest(false);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  const signIn = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Sign in failed", error);
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await auth.signOut();
+      setIsGuest(false);
+    } catch (error) {
+      console.error("Sign out failed", error);
+    }
+  };
+
+  const continueAsGuest = () => {
+    setIsGuest(true);
+  };
+
+  return (
+    <FirebaseContext.Provider value={{ user, loading, isGuest, signIn, signOut, continueAsGuest }}>
+      {children}
+    </FirebaseContext.Provider>
+  );
+}
+
+function useFirebase() {
+  const context = useContext(FirebaseContext);
+  if (context === undefined) {
+    throw new Error('useFirebase must be used within a FirebaseProvider');
+  }
+  return context;
 }
 
 // --- Error Boundary ---
@@ -69,13 +185,99 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 export default function App() {
   return (
     <ErrorBoundary>
-      <ODENApp />
+      <FirebaseProvider>
+        <ODENAppWrapper />
+      </FirebaseProvider>
     </ErrorBoundary>
   );
 }
 
+function ODENAppWrapper() {
+  const { user, loading, signIn, isGuest, continueAsGuest } = useFirebase();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-8 h-8 animate-spin text-black" />
+          <p className="text-[10px] font-mono uppercase tracking-widest">Initializing System...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user && !isGuest) {
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-8">
+        <div className="max-w-md w-full border-2 border-black p-12 bg-white shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
+          <div className="flex justify-center mb-8">
+            <div className="w-16 h-16 bg-black flex items-center justify-center rounded-full">
+              <Shield className="text-white w-8 h-8" />
+            </div>
+          </div>
+          <h1 className="text-3xl font-serif italic mb-2 text-center">ODEN Research</h1>
+          <p className="text-[10px] font-mono uppercase tracking-widest text-center mb-8 opacity-60">Investigative Partner System</p>
+          
+          <div className="space-y-6 mb-10">
+            <p className="text-sm leading-relaxed text-center opacity-80">
+              Access to the ODEN system requires secure authentication for cloud sync. Alternatively, you can continue as a guest and store data locally on this device.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <button 
+              onClick={signIn}
+              className="w-full bg-black text-white py-4 flex items-center justify-center gap-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all group"
+            >
+              <LogIn className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              Authenticate with Google
+            </button>
+
+            <button 
+              onClick={continueAsGuest}
+              className="w-full border border-black/20 text-black py-4 flex items-center justify-center gap-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-stone-100 transition-all"
+            >
+              Continue without signing in
+            </button>
+          </div>
+          
+          <div className="mt-8 pt-8 border-t border-stone-100 text-center">
+            <p className="text-[9px] font-mono uppercase opacity-40">Secure Access Protocol v2.5.0</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <ODENApp />;
+}
+
 function ODENApp() {
+  const { user, signOut, signIn, isGuest } = useFirebase();
   const [isLoaded, setIsLoaded] = useState(false);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
+
+  const parseFirestoreError = (err: string): FirestoreErrorInfo | null => {
+    try {
+      const parsed = JSON.parse(err);
+      if (parsed && typeof parsed === 'object' && 'operationType' in parsed) {
+        return parsed as FirestoreErrorInfo;
+      }
+    } catch (e) {
+      // Not a JSON error
+    }
+    return null;
+  };
+  const [investigations, setInvestigations] = useState<Investigation[]>([]);
+  const [currentInvestigationId, setCurrentInvestigationId] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareEmail, setShareEmail] = useState('');
+  const [isSharing, setIsSharing] = useState(false);
+  const [localTitle, setLocalTitle] = useState(() => localStorage.getItem('oden_local_title') || 'Local Session');
+  const [showProjectSelector, setShowProjectSelector] = useState(false);
+  const [showMobileNav, setShowMobileNav] = useState(false);
+
   const [researchStep, setResearchStep] = useState<number>(0);
   const [claim, setClaim] = useState('');
   const [loading, setLoading] = useState(false);
@@ -216,73 +418,414 @@ function ODENApp() {
   const [sourceSearch, setSourceSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'All' | 'Primary' | 'Secondary' | 'Archive' | 'Upload' | 'Other'>('All');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showNewInvestigationModal, setShowNewInvestigationModal] = useState(false);
+  const [newInvestigationTitle, setNewInvestigationTitle] = useState('');
+  const [showRenameModal, setShowRenameModal] = useState<{ id: string, title: string } | null>(null);
+  const [renameTitle, setRenameTitle] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ id: string, title: string } | null>(null);
 
-  // Load from LocalStorage on mount
+  // 1. Handle User Profile and Investigation List
   useEffect(() => {
-    const checkAI = async () => {
-      if (window.aistudio?.hasSelectedApiKey) {
-        const connected = await window.aistudio.hasSelectedApiKey();
-        setAiConnected(connected);
+    setIsLoaded(false); // Reset on user change
+    if (!user) {
+      let localInvs = [];
+      try {
+        localInvs = JSON.parse(localStorage.getItem('oden_local_investigations') || '[]');
+      } catch (e) {
+        console.error("Failed to parse local investigations", e);
+      }
+      
+      // Migration from old single-session format
+      if (localInvs.length === 0) {
+        const oldSessionStr = localStorage.getItem('oden_session');
+        let oldSession = { claim: '', data: null, chatMessages: [], requests: [], sources: [], researchPoints: [], suggestions: null };
+        if (oldSessionStr) {
+          try {
+            oldSession = JSON.parse(oldSessionStr);
+          } catch (e) {}
+        }
+        
+        const defaultInv = {
+          id: 'local-default',
+          title: localStorage.getItem('oden_local_title') || 'Local Session',
+          ownerId: 'guest',
+          collaborators: ['guest'],
+          collaboratorEmails: [],
+          claim: oldSession.claim || '',
+          data: oldSession.data || null,
+          chatMessages: oldSession.chatMessages || [],
+          requests: oldSession.requests || [],
+          sources: oldSession.sources || [],
+          researchPoints: oldSession.researchPoints || [],
+          suggestions: oldSession.suggestions || { 
+            bridges: [], gaps: [], researchAreas: [], crossovers: [], entities: [], 
+            anomalies: [], conflicts: [], keyActors: [], methodologicalAdvice: [],
+            institutionalGaps: [], structuralAnomalies: [], patternRecognition: [], riskAssessment: [] 
+          },
+          updatedAt: new Date().toISOString()
+        };
+        localInvs = [defaultInv];
+        localStorage.setItem('oden_local_investigations', JSON.stringify(localInvs));
+      }
+
+      setInvestigations(localInvs);
+      
+      const savedId = localStorage.getItem('oden_current_inv_id');
+      if (savedId && localInvs.find((i: any) => i.id === savedId)) {
+        setCurrentInvestigationId(savedId);
+      } else {
+        setCurrentInvestigationId(localInvs[0].id);
+      }
+      
+      setUserProfile(null);
+      setIsLoaded(true); // Guest mode is "loaded" immediately
+      return;
+    }
+
+    let unsubInvs: (() => void) | null = null;
+
+    const setupUserAndListen = async (retries = 3) => {
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        let userDocSnap;
+        
+        try {
+          userDocSnap = await getDoc(userDocRef);
+        } catch (e) {
+          if (retries > 0 && e instanceof Error && e.message.includes('offline')) {
+            console.warn(`Firestore offline, retrying in 2s... (${retries} left)`);
+            setTimeout(() => setupUserAndListen(retries - 1), 2000);
+            return;
+          }
+          throw e;
+        }
+        
+        let profile: UserProfile;
+        if (!userDocSnap.exists()) {
+          profile = {
+            uid: user.uid,
+            email: user.email || '',
+            displayName: user.displayName || '',
+            photoURL: user.photoURL || '',
+            investigationIds: []
+          };
+          await setDoc(userDocRef, profile);
+        } else {
+          profile = userDocSnap.data() as UserProfile;
+        }
+        setUserProfile(profile);
+
+        // Listen for investigations where user is owner or collaborator
+        const q = query(
+          collection(db, 'investigations'),
+          where('collaboratorEmails', 'array-contains', user.email)
+        );
+        
+        unsubInvs = onSnapshot(q, (snapshot) => {
+          const invs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Investigation));
+          setInvestigations(invs);
+          
+          // Auto-select first investigation if none selected
+          if (invs.length > 0 && !currentInvestigationId) {
+            setCurrentInvestigationId(invs[0].id);
+          } else if (invs.length === 0) {
+            // Create a default one if none exist
+            createNewInvestigation("Initial Investigation");
+          }
+        }, (error) => {
+          // Don't throw for offline errors in snapshot, just log
+          if (error.message.includes('offline')) {
+            console.warn("Firestore snapshot listener is offline, waiting for connection...");
+          } else {
+            handleFirestoreError(error, OperationType.LIST, 'investigations');
+          }
+        });
+
+      } catch (e) {
+        handleFirestoreError(e, OperationType.GET, `users/${user.uid}`);
       }
     };
-    checkAI();
 
-    const saved = localStorage.getItem('oden_session');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.data) setData(parsed.data);
-        if (parsed.chatMessages) setChatMessages(parsed.chatMessages);
-        if (parsed.requests) setRequests(parsed.requests);
-        if (parsed.sources) setSources(parsed.sources);
-        if (parsed.researchPoints) setResearchPoints(parsed.researchPoints);
-        if (parsed.claim) setClaim(parsed.claim);
-        if (parsed.suggestions) setSuggestions(parsed.suggestions);
-        if (parsed.suggestionChatMessages) setSuggestionChatMessages(parsed.suggestionChatMessages);
-        if (parsed.activeTab) setActiveTab(parsed.activeTab);
-        if (parsed.researchStep !== undefined) setResearchStep(parsed.researchStep);
-        if (parsed.dossierSort) setDossierSort(parsed.dossierSort);
-        if (parsed.dossierFilter) setDossierFilter(parsed.dossierFilter);
-        if (parsed.investigationFilter) setInvestigationFilter(parsed.investigationFilter);
-        if (parsed.sourceFilter) setSourceFilter(parsed.sourceFilter);
-        if (parsed.uploadedFiles) setUploadedFiles(parsed.uploadedFiles);
-        if (parsed.strategistFeed) setStrategistFeed(parsed.strategistFeed);
-      } catch (e) {
-        console.error("Failed to load session", e);
-      }
+    setupUserAndListen();
+
+    return () => {
+      if (unsubInvs) unsubInvs();
+    };
+  }, [user]);
+
+  // 2. Sync current investigation data to state
+  useEffect(() => {
+    if (!user || !currentInvestigationId) {
+      setIsLoaded(false);
+      return;
     }
-    setIsLoaded(true);
-  }, []);
+
+    setIsLoaded(false); // Reset on ID change to prevent saving old data to new ID
+
+    const unsubscribe = onSnapshot(doc(db, 'investigations', currentInvestigationId), (docSnap) => {
+      if (docSnap.exists()) {
+        // If we have pending local writes, don't overwrite with potentially stale server data
+        if (docSnap.metadata.hasPendingWrites) return;
+
+        const inv = docSnap.data() as Investigation;
+        
+        // Update local state from cloud, but be careful with chatMessages to avoid race conditions
+        setData(inv.data || null);
+        
+        setChatMessages(prev => {
+          const incoming = inv.chatMessages || [];
+          // Only update if the incoming list is longer or we are not currently loading a chat
+          // This prevents the "disappearing message" race condition during AI generation
+          if (prev.length > incoming.length && chatLoading) return prev;
+          return incoming;
+        });
+
+        setRequests(inv.requests || []);
+        setSources(inv.sources || []);
+        setResearchPoints(inv.researchPoints || []);
+        setClaim(inv.claim || '');
+        setSuggestions(inv.suggestions || { 
+          bridges: [], gaps: [], researchAreas: [], crossovers: [], entities: [], 
+          anomalies: [], conflicts: [], keyActors: [], methodologicalAdvice: [],
+          institutionalGaps: [], structuralAnomalies: [], patternRecognition: [], riskAssessment: [] 
+        });
+        setIsLoaded(true);
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, `investigations/${currentInvestigationId}`);
+    });
+
+    return unsubscribe;
+  }, [user, currentInvestigationId]);
+
+  // 1c. Handle local investigation switching
+  useEffect(() => {
+    if (user || !currentInvestigationId || !currentInvestigationId.startsWith('local-')) return;
+
+    const localInvs = JSON.parse(localStorage.getItem('oden_local_investigations') || '[]');
+    const inv = localInvs.find((i: any) => i.id === currentInvestigationId);
+    if (inv) {
+      setData(inv.data);
+      setChatMessages(inv.chatMessages || []);
+      setSuggestionChatMessages(inv.suggestionChatMessages || []);
+      setRequests(inv.requests || []);
+      setSources(inv.sources || []);
+      setResearchPoints(inv.researchPoints || []);
+      setClaim(inv.claim || '');
+      setResearchStep(inv.researchStep || 0);
+      setSuggestions(inv.suggestions || { 
+        bridges: [], gaps: [], researchAreas: [], crossovers: [], entities: [], 
+        anomalies: [], conflicts: [], keyActors: [], methodologicalAdvice: [],
+        institutionalGaps: [], structuralAnomalies: [], patternRecognition: [], riskAssessment: [] 
+      });
+      setLocalTitle(inv.title);
+      setIsLoaded(true);
+    }
+  }, [currentInvestigationId, user]);
+
+  const renameInvestigation = async (id: string, newTitle: string) => {
+    if (!newTitle) return;
+    try {
+      if (user && id !== 'local') {
+        await updateDoc(doc(db, 'investigations', id), {
+          title: newTitle,
+          updatedAt: serverTimestamp()
+        });
+      } else if (id === 'local') {
+        setLocalTitle(newTitle);
+        localStorage.setItem('oden_local_title', newTitle);
+        // Update the investigations list immediately for local
+        setInvestigations(prev => prev.map(inv => inv.id === 'local' ? { ...inv, title: newTitle } : inv));
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `investigations/${id}`);
+    }
+  };
+
+  const createNewInvestigation = async (title: string = "New Investigation") => {
+    if (!user) {
+      const newId = `local-${Math.random().toString(36).substr(2, 9)}`;
+      const newInv: Investigation = {
+        id: newId,
+        title,
+        ownerId: 'guest',
+        collaborators: ['guest'],
+        collaboratorEmails: [],
+        claim: '',
+        data: null,
+        chatMessages: [],
+        requests: [],
+        sources: [],
+        researchPoints: [],
+        suggestions: { 
+          bridges: [], gaps: [], researchAreas: [], crossovers: [], entities: [], 
+          anomalies: [], conflicts: [], keyActors: [], methodologicalAdvice: [],
+          institutionalGaps: [], structuralAnomalies: [], patternRecognition: [], riskAssessment: [] 
+        },
+        updatedAt: new Date().toISOString()
+      };
+      const localInvs = JSON.parse(localStorage.getItem('oden_local_investigations') || '[]');
+      const updatedInvs = [...localInvs, newInv];
+      localStorage.setItem('oden_local_investigations', JSON.stringify(updatedInvs));
+      setInvestigations(updatedInvs);
+      setCurrentInvestigationId(newId);
+      localStorage.setItem('oden_current_inv_id', newId);
+      setActiveTab('guide');
+      return;
+    }
+    try {
+      const docRef = doc(collection(db, 'investigations'));
+      const newInv: Investigation = {
+        id: docRef.id,
+        title,
+        ownerId: user.uid,
+        collaborators: [user.uid],
+        collaboratorEmails: [user.email || ''],
+        claim: '',
+        data: null,
+        chatMessages: [],
+        requests: [],
+        sources: [],
+        researchPoints: [],
+        suggestions: { 
+          bridges: [], gaps: [], researchAreas: [], crossovers: [], entities: [], 
+          anomalies: [], conflicts: [], keyActors: [], methodologicalAdvice: [],
+          institutionalGaps: [], structuralAnomalies: [], patternRecognition: [], riskAssessment: [] 
+        },
+        updatedAt: serverTimestamp()
+      };
+      await setDoc(docRef, newInv);
+      setCurrentInvestigationId(docRef.id);
+      setActiveTab('guide');
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'investigations');
+    }
+  };
+
+  const shareInvestigation = async (email: string) => {
+    if (!currentInvestigationId || !email) return;
+    setIsSharing(true);
+    try {
+      await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+        collaboratorEmails: arrayUnion(email)
+      });
+      setShareEmail('');
+      setShowShareModal(false);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `investigations/${currentInvestigationId}`);
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  // 3. Initial load from LocalStorage for guest mode
+  useEffect(() => {
+    if (!user) {
+      const saved = localStorage.getItem('oden_session');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed.data) setData(parsed.data);
+          if (parsed.chatMessages) setChatMessages(parsed.chatMessages);
+          if (parsed.requests) setRequests(parsed.requests);
+          if (parsed.sources) setSources(parsed.sources);
+          if (parsed.researchPoints) setResearchPoints(parsed.researchPoints);
+          if (parsed.claim) setClaim(parsed.claim);
+          if (parsed.suggestions) setSuggestions(parsed.suggestions);
+          if (parsed.suggestionChatMessages) setSuggestionChatMessages(parsed.suggestionChatMessages);
+          if (parsed.activeTab) setActiveTab(parsed.activeTab);
+          if (parsed.researchStep !== undefined) setResearchStep(parsed.researchStep);
+          if (parsed.uploadedFiles) setUploadedFiles(parsed.uploadedFiles);
+          if (parsed.strategistFeed) setStrategistFeed(parsed.strategistFeed);
+        } catch (e) {
+          console.error("Failed to load local session", e);
+        }
+      }
+      setIsLoaded(true);
+    }
+  }, [user]);
 
   useEffect(() => {
     localStorage.setItem('oden_nara_key', naraApiKey);
   }, [naraApiKey]);
 
-  // Auto-save to LocalStorage
+  // Auto-save to Firestore and LocalStorage with debouncing
   useEffect(() => {
     if (!isLoaded) return;
 
-    const session = {
-      data,
-      chatMessages,
-      requests,
-      sources,
-      researchPoints,
-      claim,
-      suggestions,
-      suggestionChatMessages,
-      activeTab,
-      researchStep,
-      dossierSort,
-      dossierFilter,
-      investigationFilter,
-      sourceFilter,
-      uploadedFiles,
-      strategistFeed
-    };
-    localStorage.setItem('oden_session', JSON.stringify(session));
+    const timeoutId = setTimeout(() => {
+      const session = {
+        data,
+        chatMessages,
+        requests,
+        sources,
+        researchPoints,
+        claim,
+        suggestions,
+        suggestionChatMessages,
+        activeTab,
+        researchStep,
+        dossierSort,
+        dossierFilter,
+        investigationFilter,
+        sourceFilter,
+        uploadedFiles,
+        strategistFeed,
+        updatedAt: user ? new Date().toISOString() : new Date().toISOString() // Use ISO string for local storage
+      };
+
+      // Save to LocalStorage
+      localStorage.setItem('oden_session', JSON.stringify(session));
+
+      if (!user && currentInvestigationId && currentInvestigationId.startsWith('local-')) {
+        const localInvsStr = localStorage.getItem('oden_local_investigations');
+        if (localInvsStr) {
+          try {
+            const localInvs = JSON.parse(localInvsStr);
+            const updatedInvs = localInvs.map((inv: any) => {
+              if (inv.id === currentInvestigationId) {
+                return {
+                  ...inv,
+                  ...session,
+                  title: localTitle,
+                  updatedAt: new Date().toISOString()
+                };
+              }
+              return inv;
+            });
+            localStorage.setItem('oden_local_investigations', JSON.stringify(updatedInvs));
+            setInvestigations(updatedInvs);
+          } catch (e) {}
+        }
+      }
+
+      // Save to Firestore if user is logged in and we have a current investigation
+      if (user && currentInvestigationId && !currentInvestigationId.startsWith('local-')) {
+        const saveToFirestore = async () => {
+          try {
+            await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+              data,
+              chatMessages,
+              requests,
+              sources,
+              researchPoints,
+              claim,
+              suggestions,
+              updatedAt: serverTimestamp()
+            });
+          } catch (e) {
+            handleFirestoreError(e, OperationType.UPDATE, `investigations/${currentInvestigationId}`);
+          }
+        };
+        saveToFirestore();
+      }
+    }, 2000); // 2-second debounce
+
+    return () => clearTimeout(timeoutId);
   }, [
     isLoaded,
+    user,
+    currentInvestigationId,
     data, 
     chatMessages, 
     requests, 
@@ -1024,7 +1567,10 @@ function ODENApp() {
                   "type": "Archival",
                   "destination_email": "archives2reference@nara.gov",
                   "mailing_address": "8601 Adelphi Road, College Park, MD",
-                  "submission_portal": null
+                  "submission_portal": null,
+                  "verification_status": "Verified | Unverified | Guess",
+                  "verification_source": "http://...",
+                  "alternative_contacts": ["Phone: ...", "Portal: ..."]
                 }
               }
             ]
@@ -1033,7 +1579,7 @@ function ODENApp() {
           ACTIONS (MUST use the 'data' object):
           - 'add_log': { name, notes, type, priority, explanation, connection_to_pattern, verification_needs }
           - 'add_evidence': { label, description, record_type, observed_content, why_it_matters, impact, strength, citation, citation_url, connection_logic, significance, timeline_date }
-          - 'add_request': { title, recipient, institution_normalized, department, subject, body, type, destination_email, mailing_address, submission_portal }
+          - 'add_request': { title, recipient, institution_normalized, department, subject, body, type, destination_email, mailing_address, submission_portal, verification_status, verification_source, alternative_contacts }
           - 'add_source': { title, url, institution, type, notes }
           - 'update_request': { id, body, status }
           - 'update_evidence': { record_id, ...fields to update }
@@ -1735,12 +2281,20 @@ function ODENApp() {
         1. Break it down into 3-5 testable sub-claims.
         2. For each sub-claim, generate a research blueprint (checklist of records to find).
         3. Use the googleSearch tool to find real, primary source links for these records.
-        4. For every institution or agency identified, you MUST find the EXACT FOIA contact details:
-           - Destination Email
+        4. DEEP INVESTIGATIVE SEARCH:
+           - REAL-TIME MONITORING: Search for declassification announcements, recent news, or press releases (last 24 months) related to the entities.
+           - PERSONNEL BACKGROUNDING: Identify key actors and search for career histories, board memberships, and public statements indicating institutional crossovers.
+           - FINANCIAL & CORPORATE MAPPING: Search for SEC filings, corporate registrations, and inter-agency fund flows (MOUs, transfer agreements).
+           - LEGAL & REGULATORY TRACKING: Find relevant FOIA logs, court cases, and declassification schedules.
+           - GEOSPATIAL CONTEXT: Find historical maps, site-specific reports, or environmental assessments for physical locations mentioned.
+           - CROSS-LANGUAGE CHECK: Search for international archival mentions or foreign-language reports on these events.
+        5. For every institution or agency identified, you MUST find the EXACT FOIA contact details:
+           - Destination Email (MANDATORY: Use Google Search to verify the current FOIA email for the specific agency/office)
            - Mailing Address
            - Submission Portal URL
            - Specific Department or Office name
-        5. Find specific Record Group (RG) numbers, Accession Numbers, or Series Titles for the requested documents.
+        6. Find specific Record Group (RG) numbers, Accession Numbers, or Series Titles for the requested documents.
+        7. VERIFICATION PROTOCOL: If you find an email, cross-reference it with the official institutional website. If you are unsure, mark it as a "Guess" or "Unverified".
         
         OUTPUT: Provide a detailed text report of your findings. Be specific with URLs, emails, and archival identifiers.` }] }],
         config: { 
@@ -1762,7 +2316,9 @@ function ODENApp() {
         CORE METHODOLOGY (ODEN):
         1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
         2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
-        3. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
+        3. DEEP SYNTHESIS: Incorporate real-time monitoring, personnel backgrounding, financial mapping, and geospatial context found in the research.
+        3. DOMAIN-AGNOSTIC RESEARCH: Treat ALL domains (Historical, Corporate, Legal, Financial, Scientific, Political) as systems of records to be mapped. Follow the administrative footprint wherever it leads.
+        4. INVESTIGATIVE TONE: Use sharp, structural language. Point out crossovers (e.g., "Official X appears in both the destruction order and the later reorganization").
         
         GOALS:
         1. Generate 10-15 Evidence Records (Dossier items) with detailed context.
@@ -1770,11 +2326,15 @@ function ODENApp() {
            * CRITICAL: 'citation_url' MUST be the direct link to the record or finding.
            * CRITICAL: 'connection_logic' and 'significance' are MANDATORY.
         2. Perform a Structural Analysis (Bridges, Gaps, Anomalies).
+           * CROSSOVER ANALYSIS (CRITICAL): Explicitly identify personnel crossovers (dual roles, board memberships) and financial crossovers (inter-agency fund flows, corporate-government contracts). Look for "Bridges" (the same person or entity appearing in two different, seemingly independent domains).
         3. Draft 3-5 comprehensive FOIA requests for the identified gaps.
            * FOIA DRAFTING PROTOCOL (STRICT):
              - Use the EXACT contact details (emails, portals, addresses) found in the RESEARCH FINDINGS.
              - Identify exact Record Group (RG), Accession Number, or Office.
              - Body MUST be 3-5 paragraphs of detailed, formal request text. Include specific accession numbers, box numbers, or folder titles found during search. MUST NEVER BE EMPTY.
+             - 'verification_status': 'Verified' if found on official site, 'Unverified' if found on secondary site, 'Guess' if inferred.
+             - 'verification_source': The URL where the contact info was found.
+             - 'alternative_contacts': List other ways to reach them (phone, portal, different office).
         4. Create 5-8 Investigation Log leads.
            * INVESTIGATION LOG PROTOCOL (MANDATORY):
              - 'explanation': 3-5 sentences explaining the "Why" and the "How".
@@ -1817,7 +2377,10 @@ function ODENApp() {
               "body": "Formal 3-5 paragraph request...",
               "destination_email": "officer@agency.gov",
               "mailing_address": "Address",
-              "submission_portal": "URL"
+              "submission_portal": "URL",
+              "verification_status": "Verified | Unverified | Guess",
+              "verification_source": "URL",
+              "alternative_contacts": [{"type": "Phone", "value": "555-0199"}]
             }
           ],
           "logs": [
@@ -1991,13 +2554,33 @@ function ODENApp() {
     const userMsg = overrideMsg || chatInput;
     if (!userMsg.trim()) return;
     const timestamp = new Date().toISOString();
-    setChatMessages(prev => [...prev, { role: 'user', content: userMsg, timestamp }]);
+    const newUserMsg: ChatMessage = { role: 'user', content: userMsg, timestamp };
+    
+    // Update local state immediately
+    setChatMessages(prev => [...prev, newUserMsg]);
     if (!overrideMsg) setChatInput('');
     setChatLoading(true);
+
+    // If logged in, sync the user message to Firestore immediately to avoid race conditions
+    if (user && currentInvestigationId && !currentInvestigationId.startsWith('local-')) {
+      try {
+        await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+          chatMessages: arrayUnion(newUserMsg),
+          updatedAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.error("Failed to sync user message to Firestore", e);
+      }
+    }
+
     try {
       const genAI = getGenAI();
-      const historyContext = chatMessages && chatMessages.length > 0 
-        ? `CONVERSATION HISTORY:\n${chatMessages.map((m: any) => `${m.role.toUpperCase()}: ${m.content}`).join('\n')}\n\n`
+      
+      // Use the updated messages for context (including the one we just added)
+      const currentMessages = [...chatMessages, newUserMsg];
+      
+      const historyContext = currentMessages.length > 0 
+        ? `CONVERSATION HISTORY:\n${currentMessages.map((m: any) => `${m.role.toUpperCase()}: ${m.content}`).join('\n')}\n\n`
         : '';
 
       const filesContext = uploadedFiles && uploadedFiles.length > 0
@@ -2045,10 +2628,17 @@ function ODENApp() {
         config: {
           systemInstruction: `You are the ODEN Discovery Engine. Your sole task is to find REAL institutional details using Google Search and the NARA Catalog. 
           Focus on:
-          1. FOIA contact emails and mailing addresses.
+          1. FOIA contact emails and mailing addresses. (MANDATORY: Use Google Search to verify the current FOIA email for the specific agency/office. Cross-reference with official institutional websites.)
           2. Specific Record Groups (RG) or Accession numbers.
           3. Department names and specific offices.
           4. Direct links to archival finding aids.
+          5. DEEP INVESTIGATIVE SEARCH:
+             - REAL-TIME MONITORING: Search for declassification announcements, recent news, or press releases (last 24 months) related to the inquiry.
+             - PERSONNEL BACKGROUNDING: Identify key actors and search for career histories, board memberships, and public statements indicating institutional crossovers.
+             - FINANCIAL & CORPORATE MAPPING: Search for SEC filings, corporate registrations, and inter-agency fund flows (MOUs, transfer agreements).
+             - LEGAL & REGULATORY TRACKING: Find relevant FOIA logs, court cases, and declassification schedules.
+             - GEOSPATIAL CONTEXT: Find historical maps, site-specific reports, or environmental assessments for physical locations mentioned.
+             - CROSS-LANGUAGE CHECK: Search for international archival mentions or foreign-language reports on these events.
           
           If you have access to the NARA Catalog tool, use it for specific archival Record Group searches.
           Provide your findings in a clear, detailed summary. If you find multiple sources, list them all.`,
@@ -2096,12 +2686,14 @@ function ODENApp() {
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
-          3. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows). These are the structural pillars of any institutional pattern.
-          4. STRATEGIC COLLABORATION: Act as a research assistant. Discuss theories, suggest research paths, and provide context beyond just record fetching. If the user is brainstorming, engage in the discussion without always needing to trigger a new record or action.
-          5. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
-          6. INVESTIGATIVE NARRATIVE: Open with a narrative assessment of the findings (e.g., "This is a genuinely fascinating and frustrating record gap"). Synthesize information into thematic sections (e.g., "The Scale," "The Institutional Response," "What Actually Survives").
-          7. CROSSOVER ANALYSIS: Explicitly point out personnel crossovers (dual roles) and financial crossovers (inter-agency fund flows).
-          8. STRUCTURAL PROBLEM CONCLUSION: Map findings back to the core methodology—explaining how the record destruction or absence fits into a system built for untraceability.
+          3. DOMAIN-AGNOSTIC RESEARCH: Treat ALL domains (Historical, Corporate, Legal, Financial, Scientific, Political) as systems of records to be mapped. Follow the administrative footprint wherever it leads.
+          4. DEEP SYNTHESIS: Incorporate real-time monitoring, personnel backgrounding, financial mapping, and geospatial context found in the search findings.
+          5. CROSSOVER ANALYSIS (CRITICAL): Explicitly identify personnel crossovers (dual roles, board memberships) and financial crossovers (inter-agency fund flows, corporate-government contracts). Look for "Bridges" (the same person or entity appearing in two different, seemingly independent domains).
+          6. STRATEGIC COLLABORATION: Act as a research assistant. Discuss theories, suggest research paths, and provide context beyond just record fetching. If the user is brainstorming, engage in the discussion without always needing to trigger a new record or action.
+          7. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          8. INVESTIGATIVE NARRATIVE: Open with a narrative assessment of the findings. Synthesize information into thematic sections (e.g., "The Scale," "The Institutional Response," "What Actually Survives").
+          9. INVESTIGATIVE OUTLOOK (MANDATORY): Conclude your 'response' with a section titled "INVESTIGATIVE OUTLOOK." This section MUST focus on the implications of the findings—what they *could* imply about structural links, gaps, or hidden patterns. Use speculative but grounded language (e.g., "This could imply a structural link to...", "The absence of X suggests a potential gap in...").
+          10. BRAINSTORMING ACTIONS: Use the 'actions' array to suggest strategic pivots or brainstorming paths (e.g., "Pivot to Financial Trail", "Test Crossover Theory").
           
           CRITICAL: Use the SEARCH FINDINGS provided to populate your actions. NEVER use placeholder text like "Unnamed", "Unknown", or "Untitled".
           
@@ -2124,7 +2716,7 @@ function ODENApp() {
           
           JSON STRUCTURE EXAMPLE:
           {
-            "response": "Your investigative analysis (narrative, engaging, and context-rich)...",
+            "response": "Your investigative analysis (narrative, engaging, and context-rich)...\n\n### INVESTIGATIVE OUTLOOK\nBased on these findings, this could imply...",
             "reasoning": "Observed: ... Connection: ... Significance: ... Gaps: ... Crossover Analysis: ...",
             "entities": ["Entity A", "Entity B"],
             "citations": [{"title": "Source", "url": "http://...", "institution": "NARA"}],
@@ -2142,41 +2734,15 @@ function ODENApp() {
                 }
               },
               {
-                "type": "analyze_log",
-                "label": "Analyze Related Log",
+                "type": "add_log",
+                "label": "Pivot to Financial Trail",
                 "data": {
-                  "id": "ID_OF_EXISTING_LOG"
-                }
-              },
-              {
-                "type": "add_evidence",
-                "data": {
-                  "label": "Evidence Label (e.g. RG 59, Box 12)",
-                  "description": "Contextual Analysis: Why this record matters to the structural investigation...",
-                  "record_type": "Document | Archival Collection | Manuscript",
-                  "observed_content": "Specific details seen in the finding...",
-                  "why_it_matters": "Context...",
-                  "connection_logic": "Structural link to the claim...",
-                  "significance": "Impact on the overall pattern...",
-                  "impact": "Supports | Weakens | Complicates | Leaves Open",
-                  "strength": 5,
-                  "citation": "Source Title",
-                  "citation_url": "http://..."
-                }
-              },
-              {
-                "type": "add_request",
-                "data": {
-                  "title": "Archival Inquiry: RG 59 Box 12",
-                  "recipient": "NARA Textual Reference",
-                  "institution_normalized": "National Archives",
-                  "department": "Textual Records",
-                  "subject": "Inquiry regarding RG 59, Entry 10, Box 12",
-                  "body": "Detailed 3-5 paragraph inquiry referencing specific archival identifiers...",
-                  "type": "Archival",
-                  "destination_email": "archives2reference@nara.gov",
-                  "mailing_address": "8601 Adelphi Road, College Park, MD",
-                  "submission_portal": null
+                  "name": "Financial Trail Analysis",
+                  "type": "Financial",
+                  "priority": "Medium",
+                  "notes": "Exploring the funding crossovers identified in the recent search...",
+                  "isStrategistDiscovery": true,
+                  "discoveryReason": "To resolve the crossover identified between Entity X and Entity Y."
                 }
               }
             ]
@@ -2186,7 +2752,7 @@ function ODENApp() {
           - 'add_log': { name, notes, type, priority, explanation, connection_to_pattern, verification_needs, isStrategistDiscovery, discoveryReason }
           - 'analyze_log': { id }
           - 'add_evidence': { label, description, record_type, observed_content, why_it_matters, impact, strength, citation, citation_url, connection_logic, significance, timeline_date }
-          - 'add_request': { title, recipient, institution_normalized, department, subject, body, type, destination_email, mailing_address, submission_portal }
+          - 'add_request': { title, recipient, institution_normalized, department, subject, body, type, destination_email, mailing_address, submission_portal, verification_status, verification_source, alternative_contacts }
           - 'add_source': { title, url, institution, type, notes }
           - 'update_request': { id, body, status }
           - 'update_evidence': { record_id, ...fields to update }
@@ -2347,7 +2913,7 @@ function ODENApp() {
         });
       }
 
-      setChatMessages(prev => [...prev, { 
+      const aiMsg: ChatMessage = { 
         role: 'assistant', 
         content: result.response + actionSummary, 
         reasoning: result.reasoning,
@@ -2355,7 +2921,21 @@ function ODENApp() {
         timestamp: aiTimestamp,
         citations: result.citations,
         actions: result.actions
-      }]);
+      };
+
+      setChatMessages(prev => [...prev, aiMsg]);
+
+      // Sync AI message immediately to Firestore to avoid race conditions
+      if (user && currentInvestigationId && !currentInvestigationId.startsWith('local-')) {
+        try {
+          await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+            chatMessages: arrayUnion(aiMsg),
+            updatedAt: serverTimestamp()
+          });
+        } catch (e) {
+          console.error("Failed to sync AI message to Firestore", e);
+        }
+      }
     } catch (err: any) {
       console.error("Chat Error:", err);
       setChatMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}`, timestamp: new Date().toISOString() }]);
@@ -2487,60 +3067,229 @@ function ODENApp() {
     setShowClearConfirm(true);
   };
 
-  const handleClearSession = () => {
-    setData(null);
-    setChatMessages([]);
-    setSuggestionChatMessages([]);
-    setRequests([]);
-    setSources([]);
-    setResearchPoints([]);
-    setClaim('');
-    setResearchStep(0);
-    setSuggestions({ 
-      bridges: [], 
-      gaps: [], 
-      researchAreas: [], 
-      crossovers: [], 
-      entities: [], 
-      anomalies: [], 
-      conflicts: [], 
-      keyActors: [], 
-      methodologicalAdvice: [],
-      institutionalGaps: [],
-      structuralAnomalies: [],
-      patternRecognition: [],
-      riskAssessment: []
-    });
-    localStorage.removeItem('oden_session');
+  const handleClearSession = async () => {
+    if (!currentInvestigationId || !user) {
+      // Local only clear
+      setData(null);
+      setChatMessages([]);
+      setSuggestionChatMessages([]);
+      setRequests([]);
+      setSources([]);
+      setResearchPoints([]);
+      setClaim('');
+      setResearchStep(0);
+      setSuggestions({ 
+        bridges: [], gaps: [], researchAreas: [], crossovers: [], entities: [], 
+        anomalies: [], conflicts: [], keyActors: [], methodologicalAdvice: [],
+        institutionalGaps: [], structuralAnomalies: [], patternRecognition: [], riskAssessment: [] 
+      });
+      localStorage.removeItem('oden_session');
+      setActiveTab('guide');
+      setShowClearConfirm(false);
+      return;
+    }
+
+    try {
+      // Delete the current investigation if user is owner
+      const inv = investigations.find(i => i.id === currentInvestigationId);
+      if (inv && inv.ownerId === user.uid) {
+        // In a real app we'd delete the doc, but for safety let's just clear it
+        await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+          data: null,
+          chatMessages: [],
+          requests: [],
+          sources: [],
+          researchPoints: [],
+          claim: '',
+          suggestions: { 
+            bridges: [], gaps: [], researchAreas: [], crossovers: [], entities: [], 
+            anomalies: [], conflicts: [], keyActors: [], methodologicalAdvice: [],
+            institutionalGaps: [], structuralAnomalies: [], patternRecognition: [], riskAssessment: []
+          },
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        // Just remove self from collaborators
+        await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+          collaboratorEmails: arrayRemove(user.email)
+        });
+        setCurrentInvestigationId(null);
+      }
+    } catch (e) {
+      console.error("Failed to clear investigation", e);
+    }
+    
     setActiveTab('guide');
     setShowClearConfirm(false);
   };
 
+  const currentInvestigation = investigations.find(i => i.id === currentInvestigationId);
+  const collaboratorEmails = currentInvestigation?.collaboratorEmails || [];
+
   return (
     <div className="min-h-screen flex flex-col bg-[#fcfcfc] text-black">
       {/* Header */}
-      <header className="border-b border-black p-4 md:p-6 flex justify-between items-center bg-white sticky top-0 z-[60]">
-        <div className="flex items-center gap-4">
-          <div className="md:hidden">
-            <select 
-              value={activeTab}
-              onChange={(e) => setActiveTab(e.target.value as any)}
-              className="bg-transparent font-mono text-[10px] uppercase border border-black px-2 py-1 focus:outline-none"
+      <header className="border-b border-black p-2 md:p-6 flex justify-between items-center bg-white sticky top-0 z-[60]">
+        <div className="flex items-center gap-1 md:gap-4">
+          {/* Project Selector */}
+          {(user || isGuest) && (
+            <div className="relative group">
+              <button 
+                onClick={() => setShowProjectSelector(!showProjectSelector)}
+                className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 md:py-2 border border-black text-[9px] md:text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black hover:text-white transition-all"
+              >
+                <FolderOpen className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                <span className="max-w-[40px] sm:max-w-[100px] truncate">
+                  {investigations.find(i => i.id === currentInvestigationId)?.title || "Select Project"}
+                </span>
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              
+              <AnimatePresence>
+                {showProjectSelector && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    className="absolute left-0 top-full mt-2 w-64 bg-white border border-black shadow-2xl z-[100] p-4"
+                  >
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-[10px] font-mono uppercase font-bold opacity-40">My Investigations</h3>
+                      <button 
+                        onClick={() => {
+                          setNewInvestigationTitle("");
+                          setShowNewInvestigationModal(true);
+                          setShowProjectSelector(false);
+                        }}
+                        className="p-1 hover:bg-black hover:text-white transition-all"
+                        title="New Investigation"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-1 max-h-60 overflow-y-auto">
+                      {investigations.length === 0 ? (
+                        <p className="text-[10px] font-mono opacity-40 py-4 text-center italic">No investigations found.</p>
+                      ) : (
+                        investigations.map(inv => (
+                          <div key={inv.id} className="flex items-center group/item">
+                            <button
+                              onClick={() => {
+                                setCurrentInvestigationId(inv.id);
+                                setShowProjectSelector(false);
+                              }}
+                              className={cn(
+                                "flex-1 text-left px-3 py-2 text-[10px] font-mono uppercase transition-all flex items-center justify-between",
+                                currentInvestigationId === inv.id ? "bg-black text-white" : "hover:bg-stone-100"
+                              )}
+                            >
+                              <span className="truncate pr-2">{inv.title}</span>
+                              {user && inv.ownerId !== user.uid && (
+                                <Users className="w-3 h-3 opacity-40" />
+                              )}
+                            </button>
+                            {(user && inv.ownerId === user.uid || inv.id.startsWith('local-')) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRenameTitle(inv.title);
+                                  setShowRenameModal({ id: inv.id, title: inv.title });
+                                  setShowProjectSelector(false);
+                                }}
+                                className={cn(
+                                  "p-2 transition-all",
+                                  currentInvestigationId === inv.id 
+                                    ? "bg-black text-white hover:bg-stone-900" 
+                                    : "hover:bg-stone-200"
+                                )}
+                                title="Rename"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {/* Mobile Navigation Dropdown */}
+          <div className="md:hidden relative">
+            <button 
+              onClick={() => setShowMobileNav(!showMobileNav)}
+              className="flex items-center gap-1 px-2 py-1.5 border border-black text-[9px] font-mono uppercase font-bold tracking-widest hover:bg-black hover:text-white transition-all"
             >
-              <option value="guide">00 Guide</option>
-              <option value="pipeline">01 Pipeline</option>
-              <option value="dossier">02 Dossier</option>
-              <option value="list">03 Records</option>
-              <option value="investigation">04 Investigation Log</option>
-              <option value="chat">05 Chat</option>
-              <option value="requests">06 Requests</option>
-              <option value="suggestions">07 Suggestions</option>
-              <option value="timeline">08 Timeline</option>
-              <option value="sources">09 Sources</option>
-              <option value="data-management">10 Data Management</option>
-              <option value="settings">11 Settings</option>
-            </select>
+              <List className="w-3 h-3" />
+              <span className="max-w-[40px] sm:max-w-[80px] truncate">{activeTab}</span>
+              <ChevronDown className="w-3 h-3" />
+            </button>
+            
+            <AnimatePresence>
+              {showMobileNav && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute left-0 top-full mt-2 w-64 bg-white border border-black shadow-2xl z-[100] p-4"
+                >
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-[10px] font-mono uppercase font-bold opacity-40">Navigation</h3>
+                    <button onClick={() => setShowMobileNav(false)} className="p-1 hover:bg-stone-100">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-1 max-h-[70vh] overflow-y-auto">
+                    {[
+                      { id: 'guide', label: '00 Guide', icon: Compass },
+                      { id: 'pipeline', label: '01 Pipeline', icon: Network },
+                      { id: 'dossier', label: '02 Dossier', icon: FileText },
+                      { id: 'list', label: '03 Records', icon: List },
+                      { id: 'investigation', label: '04 Investigation Log', icon: History },
+                      { id: 'sources', label: '05 Sources', icon: BookOpen },
+                      { id: 'timeline', label: '06 Timeline', icon: Calendar },
+                      { id: 'chat', label: '07 Research Strategist', icon: Send },
+                      { id: 'requests', label: '08 FOIA/Archival Requests', icon: Mail },
+                      { id: 'suggestions', label: '09 AI Suggestions', icon: Sparkles },
+                      { id: 'data-management', label: '10 Data Management', icon: Save },
+                      { id: 'settings', label: '11 Settings', icon: Settings },
+                    ].map(item => (
+                      <button
+                        key={item.id}
+                        onClick={() => {
+                          setActiveTab(item.id as any);
+                          setShowMobileNav(false);
+                        }}
+                        className={cn(
+                          "w-full text-left px-3 py-2 text-[10px] font-mono uppercase transition-all flex items-center gap-3",
+                          activeTab === item.id ? "bg-black text-white" : "hover:bg-stone-100"
+                        )}
+                      >
+                        <item.icon className="w-3.5 h-3.5" />
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
+
+          {user && currentInvestigationId && (
+            <button 
+              onClick={() => setShowShareModal(true)}
+              className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 md:py-2 border border-black text-[9px] md:text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black hover:text-white transition-all"
+            >
+              <Share2 className="w-3 h-3 md:w-3.5 md:h-3.5" />
+              <span className="hidden sm:inline">Share</span>
+            </button>
+          )}
+
           <div className="hidden md:block">
             <h1 className="text-2xl font-serif italic tracking-tight leading-none">ODEN</h1>
             <p className="text-[8px] font-mono uppercase opacity-40 tracking-widest mt-1">Observational Diagnostic Entry Network</p>
@@ -2633,11 +3382,44 @@ function ODENApp() {
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1 md:gap-4">
+          {user ? (
+            <div className="flex items-center gap-2 md:gap-3 pr-2 md:pr-4 border-r border-black/10">
+              <div className="hidden sm:flex flex-col items-end">
+                <span className="text-[9px] font-mono uppercase font-bold">{user.displayName || 'Investigator'}</span>
+                <span className="text-[8px] font-mono uppercase opacity-40">{user.email}</span>
+              </div>
+              {user.photoURL ? (
+                <img src={user.photoURL} alt="" className="w-6 h-6 md:w-8 md:h-8 rounded-full border border-black/10" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="w-6 h-6 md:w-8 md:h-8 rounded-full bg-stone-100 flex items-center justify-center border border-black/10">
+                  <Users className="w-3 h-3 md:w-4 md:h-4 opacity-40" />
+                </div>
+              )}
+              <button 
+                onClick={signOut}
+                className="p-1.5 md:p-2 hover:bg-red-50 hover:text-red-600 transition-all rounded-full group"
+                title="Sign Out"
+              >
+                <LogOut className="w-3.5 h-3.5 md:w-4 md:h-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 md:gap-3 pr-2 md:pr-4 border-r border-black/10">
+              <button 
+                onClick={signIn}
+                className="flex items-center gap-1 md:gap-2 px-2 md:px-4 py-1.5 md:py-2 bg-black text-white text-[9px] md:text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all"
+              >
+                <LogIn className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                <span className="hidden sm:inline">Sign In</span>
+              </button>
+            </div>
+          )}
+
           <div className="hidden sm:flex items-center gap-2">
-            <div className={cn("w-1.5 h-1.5 rounded-full", error ? "bg-red-500 animate-pulse" : "bg-emerald-500")} />
+            <div className={cn("w-1.5 h-1.5 rounded-full", error ? "bg-red-500 animate-pulse" : (user ? "bg-emerald-500" : "bg-amber-500"))} />
             <span className="text-[8px] font-mono uppercase opacity-40">
-              {error ? "Error" : "Sync Active"}
+              {error ? "Error" : (user ? "Sync Active" : "Local Only")}
             </span>
           </div>
           <button 
@@ -2650,7 +3432,54 @@ function ODENApp() {
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        {error && (
+          <div className="absolute top-0 left-0 right-0 z-[100] bg-red-600 text-white p-4 shadow-2xl animate-in slide-in-from-top duration-300">
+            <div className="max-w-4xl mx-auto flex items-start gap-4">
+              <AlertTriangle className="w-6 h-6 shrink-0 mt-1" />
+              <div className="flex-1">
+                <h3 className="font-bold text-sm uppercase tracking-widest mb-1">System Error Detected</h3>
+                <p className="text-xs opacity-90 mb-3">
+                  {parseFirestoreError(error) 
+                    ? `A database error occurred during a ${parseFirestoreError(error)?.operationType} operation.`
+                    : error}
+                </p>
+                
+                {parseFirestoreError(error) && (
+                  <div className="mb-3">
+                    <button 
+                      onClick={() => setShowErrorDetails(!showErrorDetails)}
+                      className="text-[10px] uppercase font-mono border border-white/30 px-2 py-1 hover:bg-white/10 transition-all"
+                    >
+                      {showErrorDetails ? "Hide Technical Details" : "Show Technical Details"}
+                    </button>
+                    {showErrorDetails && (
+                      <pre className="mt-2 p-3 bg-black/20 rounded text-[10px] font-mono overflow-x-auto max-h-40">
+                        {JSON.stringify(parseFirestoreError(error), null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => window.location.reload()}
+                    className="bg-white text-red-600 px-4 py-2 text-[10px] font-mono uppercase font-bold hover:bg-stone-100 transition-all"
+                  >
+                    Reload Application
+                  </button>
+                  <button 
+                    onClick={() => setError(null)}
+                    className="border border-white/50 px-4 py-2 text-[10px] font-mono uppercase font-bold hover:bg-white/10 transition-all"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Content Area */}
         <div className="flex-1 overflow-hidden relative">
           <AnimatePresence mode="wait">
@@ -3147,7 +3976,21 @@ function ODENApp() {
                     <div className="flex justify-between items-end border-b border-black pb-8">
                       <div>
                         <h2 className="text-4xl font-serif italic mb-2">Evidence Dossier</h2>
-                        <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Methodological Compilation of Research Findings</p>
+                        <div className="flex items-center gap-4">
+                          <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Methodological Compilation of Research Findings</p>
+                          {collaboratorEmails && collaboratorEmails.length > 0 && (
+                            <div className="flex items-center gap-1 border-l border-black/20 pl-4">
+                              <Users className="w-3 h-3 opacity-40" />
+                              <div className="flex -space-x-2">
+                                {collaboratorEmails.map((email, i) => (
+                                  <div key={i} className="w-5 h-5 rounded-full bg-stone-200 border border-black flex items-center justify-center text-[8px] font-mono uppercase" title={email}>
+                                    {email.charAt(0)}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div className="flex gap-4">
                         <button 
@@ -4010,6 +4853,36 @@ function ODENApp() {
                                 <button onClick={() => { navigator.clipboard.writeText(req.mailing_address); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
                               </div>
                             )}
+
+                            {req.verification_status && (
+                              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-black/5">
+                                <span className={cn(
+                                  "text-[8px] font-mono px-1.5 py-0.5 uppercase border flex items-center gap-1",
+                                  req.verification_status === 'Verified' ? "bg-green-50 border-green-600 text-green-700" :
+                                  req.verification_status === 'Unverified' ? "bg-yellow-50 border-yellow-600 text-yellow-700" :
+                                  "bg-red-50 border-red-600 text-red-700"
+                                )}>
+                                  {req.verification_status === 'Verified' ? <CheckCircle2 className="w-2 h-2" /> : <AlertCircle className="w-2 h-2" />}
+                                  {req.verification_status}
+                                </span>
+                                {req.verification_source && (
+                                  <a href={req.verification_source} target="_blank" rel="noreferrer" className="text-[8px] font-mono uppercase underline opacity-50 hover:opacity-100">
+                                    Source
+                                  </a>
+                                )}
+                              </div>
+                            )}
+
+                            {req.alternative_contacts && req.alternative_contacts.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                <p className="text-[8px] font-mono uppercase opacity-40">Alternative Contacts:</p>
+                                {req.alternative_contacts.map((alt, idx) => (
+                                  <p key={idx} className="text-[9px] font-mono opacity-70">
+                                    <span className="font-bold">{alt.type}:</span> {alt.value}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
                             
                             <div className="mt-4 pt-4 border-t border-black/10">
                               <div className="flex justify-between items-center mb-2">
@@ -4363,6 +5236,20 @@ function ODENApp() {
                 naraApiKey={naraApiKey}
                 setNaraApiKey={setNaraApiKey}
                 searchNara={searchNara}
+                user={user}
+                signIn={signIn}
+                signOut={signOut}
+                investigations={investigations}
+                currentInvestigationId={currentInvestigationId}
+                setCurrentInvestigationId={setCurrentInvestigationId}
+                createNewInvestigation={createNewInvestigation}
+                renameInvestigation={renameInvestigation}
+                setInvestigations={setInvestigations}
+                setShowNewInvestigationModal={setShowNewInvestigationModal}
+                setNewInvestigationTitle={setNewInvestigationTitle}
+                setShowRenameModal={setShowRenameModal}
+                setRenameTitle={setRenameTitle}
+                setShowDeleteConfirm={setShowDeleteConfirm}
               />
             )}
 
@@ -4376,7 +5263,15 @@ function ODENApp() {
               >
                 <div className="max-w-5xl mx-auto">
                   <div className="flex justify-between items-end mb-6 border-b border-black pb-4">
-                    <h2 className="text-3xl font-serif italic">Investigation Log</h2>
+                    <div className="flex items-end gap-4">
+                      <h2 className="text-3xl font-serif italic">Investigation Log</h2>
+                      {collaboratorEmails && collaboratorEmails.length > 0 && (
+                        <div className="flex items-center gap-1 mb-1">
+                          <Users className="w-3 h-3 opacity-40" />
+                          <p className="text-[8px] font-mono uppercase opacity-40">{collaboratorEmails.length} Collaborators Active</p>
+                        </div>
+                      )}
+                    </div>
                     <div className="flex gap-4">
                       <div className="relative hidden md:flex items-center gap-2">
                         <Filter className="w-3 h-3 opacity-30" />
@@ -5765,6 +6660,31 @@ function ODENApp() {
                       />
                     </div>
 
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Verification Status</label>
+                        <select 
+                          value={editingRequest.verification_status || 'Unverified'}
+                          onChange={(e) => setEditingRequest({...editingRequest, verification_status: e.target.value as any})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                        >
+                          <option value="Verified">Verified</option>
+                          <option value="Unverified">Unverified</option>
+                          <option value="Guess">Guess</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono uppercase font-bold block mb-2">Verification Source (URL)</label>
+                        <input 
+                          type="text" 
+                          value={editingRequest.verification_source || ''}
+                          onChange={(e) => setEditingRequest({...editingRequest, verification_source: e.target.value})}
+                          className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                          placeholder="https://..."
+                        />
+                      </div>
+                    </div>
+
                     <div>
                       <label className="text-[10px] font-mono uppercase font-bold block mb-2">Subject Line</label>
                       <input 
@@ -6146,8 +7066,260 @@ function ODENApp() {
             <Mail className="w-5 h-5" />
             <span className="text-[8px] font-mono uppercase font-bold">FOIA</span>
           </button>
+          <button 
+            onClick={() => setActiveTab('settings')}
+            className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'settings' ? "text-black" : "text-black/30")}
+          >
+            <Settings className="w-5 h-5" />
+            <span className="text-[8px] font-mono uppercase font-bold">Settings</span>
+          </button>
         </nav>
       )}
+
+      {/* New Investigation Modal */}
+      <AnimatePresence>
+        {showNewInvestigationModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white border-2 border-black p-8 max-w-md w-full shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-serif italic">New Investigation</h2>
+                <button onClick={() => setShowNewInvestigationModal(false)} className="p-2 hover:bg-stone-100 transition-all rounded-full">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-mono uppercase font-bold mb-2 opacity-40">Investigation Title</label>
+                  <input 
+                    type="text"
+                    autoFocus
+                    value={newInvestigationTitle}
+                    onChange={(e) => setNewInvestigationTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newInvestigationTitle) {
+                        createNewInvestigation(newInvestigationTitle);
+                        setShowNewInvestigationModal(false);
+                      }
+                    }}
+                    placeholder="e.g. Institutional Map 2025"
+                    className="w-full bg-stone-50 border border-black/10 p-3 text-sm focus:outline-none focus:border-black transition-all"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    onClick={() => setShowNewInvestigationModal(false)}
+                    className="flex-1 border border-black p-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-stone-50 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (newInvestigationTitle) {
+                        createNewInvestigation(newInvestigationTitle);
+                        setShowNewInvestigationModal(false);
+                      }
+                    }}
+                    disabled={!newInvestigationTitle}
+                    className="flex-1 bg-black text-white p-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all disabled:opacity-50"
+                  >
+                    Create
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Rename Modal */}
+      <AnimatePresence>
+        {showRenameModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white border-2 border-black p-8 max-w-md w-full shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-serif italic">Rename Investigation</h2>
+                <button onClick={() => setShowRenameModal(null)} className="p-2 hover:bg-stone-100 transition-all rounded-full">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-mono uppercase font-bold mb-2 opacity-40">New Title</label>
+                  <input 
+                    type="text"
+                    autoFocus
+                    value={renameTitle}
+                    onChange={(e) => setRenameTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && renameTitle) {
+                        renameInvestigation(showRenameModal.id, renameTitle);
+                        setShowRenameModal(null);
+                      }
+                    }}
+                    className="w-full bg-stone-50 border border-black/10 p-3 text-sm focus:outline-none focus:border-black transition-all"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    onClick={() => setShowRenameModal(null)}
+                    className="flex-1 border border-black p-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-stone-50 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (renameTitle) {
+                        renameInvestigation(showRenameModal.id, renameTitle);
+                        setShowRenameModal(null);
+                      }
+                    }}
+                    disabled={!renameTitle}
+                    className="flex-1 bg-black text-white p-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white border-2 border-black p-8 max-w-md w-full shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-serif italic text-red-600">Delete Investigation</h2>
+                <button onClick={() => setShowDeleteConfirm(null)} className="p-2 hover:bg-stone-100 transition-all rounded-full">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm opacity-60 mb-8 leading-relaxed">
+                Are you sure you want to delete <strong>"{showDeleteConfirm.title}"</strong>? This action cannot be undone and all data associated with this local investigation will be lost.
+              </p>
+
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowDeleteConfirm(null)}
+                  className="flex-1 border border-black p-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-stone-50 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    const localInvs = JSON.parse(localStorage.getItem('oden_local_investigations') || '[]');
+                    const updatedInvs = localInvs.filter((i: any) => i.id !== showDeleteConfirm.id);
+                    localStorage.setItem('oden_local_investigations', JSON.stringify(updatedInvs));
+                    setInvestigations(updatedInvs);
+                    if (currentInvestigationId === showDeleteConfirm.id) {
+                      setCurrentInvestigationId(updatedInvs[0]?.id || null);
+                    }
+                    setShowDeleteConfirm(null);
+                  }}
+                  className="flex-1 bg-red-600 text-white p-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-red-700 transition-all"
+                >
+                  Delete
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Share Modal */}
+      <AnimatePresence>
+        {showShareModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white border-2 border-black p-8 max-w-md w-full shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-serif italic">Share Investigation</h2>
+                <button onClick={() => setShowShareModal(false)} className="p-2 hover:bg-stone-100 transition-all rounded-full">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm opacity-60 mb-6 leading-relaxed">
+                Invite collaborators to this investigation. They will be able to view and edit all data in real-time.
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-mono uppercase font-bold mb-2 opacity-40">Collaborator Email</label>
+                  <div className="flex gap-2">
+                    <input 
+                      type="email"
+                      value={shareEmail}
+                      onChange={(e) => setShareEmail(e.target.value)}
+                      placeholder="partner@example.com"
+                      className="flex-1 bg-stone-50 border border-black/10 p-3 text-sm focus:outline-none focus:border-black transition-all"
+                    />
+                    <button 
+                      onClick={() => shareInvestigation(shareEmail)}
+                      disabled={isSharing || !shareEmail}
+                      className="bg-black text-white px-6 py-3 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all disabled:opacity-50"
+                    >
+                      {isSharing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Invite"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-stone-100">
+                  <h3 className="text-[10px] font-mono uppercase font-bold mb-3 opacity-40">Current Access</h3>
+                  <div className="space-y-2">
+                    {investigations.find(i => i.id === currentInvestigationId)?.collaboratorEmails?.map(email => (
+                      <div key={email} className="flex items-center justify-between text-sm">
+                        <span className="opacity-80">{email}</span>
+                        {email === user?.email ? (
+                          <span className="text-[8px] font-mono uppercase opacity-40 bg-stone-100 px-2 py-1">Owner</span>
+                        ) : (
+                          <button 
+                            onClick={async () => {
+                              if (!currentInvestigationId) return;
+                              await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+                                collaboratorEmails: arrayRemove(email)
+                              });
+                            }}
+                            className="text-red-600 hover:underline text-[10px] font-mono uppercase"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <StrategistFeed 
         feed={strategistFeed} 
@@ -6329,13 +7501,41 @@ function SettingsView({
   setAiConnected,
   naraApiKey, 
   setNaraApiKey,
-  searchNara
+  searchNara,
+  user,
+  signIn,
+  signOut,
+  investigations,
+  currentInvestigationId,
+  setCurrentInvestigationId,
+  createNewInvestigation,
+  renameInvestigation,
+  setInvestigations,
+  setShowNewInvestigationModal,
+  setNewInvestigationTitle,
+  setShowRenameModal,
+  setRenameTitle,
+  setShowDeleteConfirm
 }: { 
   aiConnected: boolean, 
   setAiConnected: (val: boolean) => void,
   naraApiKey: string, 
   setNaraApiKey: (val: string) => void,
-  searchNara: (query: string) => Promise<any>
+  searchNara: (query: string) => Promise<any>,
+  user: User | null,
+  signIn: () => Promise<void>,
+  signOut: () => Promise<void>,
+  investigations: Investigation[],
+  currentInvestigationId: string | null,
+  setCurrentInvestigationId: (id: string | null) => void,
+  createNewInvestigation: (title: string) => Promise<void>,
+  renameInvestigation: (id: string, title: string) => Promise<void>,
+  setInvestigations: (invs: Investigation[]) => void,
+  setShowNewInvestigationModal: (val: boolean) => void,
+  setNewInvestigationTitle: (val: string) => void,
+  setShowRenameModal: (val: { id: string, title: string } | null) => void,
+  setRenameTitle: (val: string) => void,
+  setShowDeleteConfirm: (val: { id: string, title: string } | null) => void
 }) {
   const [showNaraKey, setShowNaraKey] = useState(false);
   const [naraTestStatus, setNaraTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
@@ -6390,6 +7590,194 @@ function SettingsView({
           <h2 className="text-4xl font-serif italic mb-2">System Settings</h2>
           <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">API Configuration & External Connections</p>
         </div>
+
+        {/* Cloud Account */}
+        <section className="p-8 border border-black bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+          <div className="flex justify-between items-start mb-6">
+            <div className="flex items-center gap-3">
+              <div className={cn("w-3 h-3 rounded-full", user ? "bg-emerald-500" : "bg-amber-500")} />
+              <h3 className="text-xl font-serif italic">Cloud Account & Sync</h3>
+            </div>
+            <span className={cn(
+              "text-[9px] font-mono uppercase px-2 py-1 border",
+              user ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"
+            )}>
+              {user ? "Cloud Sync Active" : "Local Storage Only"}
+            </span>
+          </div>
+
+            {user ? (
+              <div className="space-y-6 mb-8">
+                <div className="flex items-center gap-4 p-4 bg-stone-50 border border-black/10">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="" className="w-12 h-12 rounded-full border border-black/10" referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-stone-200 flex items-center justify-center border border-black/10">
+                      <Users className="w-6 h-6 opacity-40" />
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-sm font-bold">{user.displayName || 'Investigator'}</p>
+                    <p className="text-xs opacity-60">{user.email}</p>
+                  </div>
+                </div>
+                
+                <button 
+                  onClick={signOut}
+                  className="w-full border border-red-600 text-red-600 py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-red-50 transition-all flex items-center justify-center gap-2"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign Out of Cloud
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-6 mb-8">
+                <p className="text-sm opacity-70 leading-relaxed">
+                  You are currently using ODEN in <strong>Guest Mode</strong>. Your data is stored locally in this browser. 
+                  Sign in to enable encrypted cloud backups and multi-device synchronization.
+                </p>
+
+                <button 
+                  onClick={signIn}
+                  className="w-full bg-black text-white py-4 text-[10px] font-mono uppercase font-bold tracking-widest hover:bg-black/80 transition-all flex items-center justify-center gap-2"
+                >
+                  <LogIn className="w-4 h-4" />
+                  Sign In with Google
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-4 pt-8 border-t border-black/10">
+              <h4 className="text-[10px] font-mono uppercase font-bold opacity-40">My Research Investigations</h4>
+              <div className="grid gap-2">
+                {investigations.map(inv => (
+                  <div key={inv.id} className="flex items-center justify-between p-4 border border-black/5 hover:border-black transition-all bg-stone-50/50 group">
+                    <div className="flex items-center gap-3">
+                      <FolderOpen className="w-4 h-4 opacity-40" />
+                      <div>
+                        <p className="text-sm font-bold">{inv.title}</p>
+                        <p className="text-[8px] font-mono uppercase opacity-40">
+                          {inv.id.startsWith('local-') ? "Local Storage" : (inv.ownerId === user?.uid ? "Owner" : "Collaborator")} 
+                          {!inv.id.startsWith('local-') && ` • ${inv.collaboratorEmails?.length || 0} Shared`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {(user && inv.ownerId === user.uid || inv.id.startsWith('local-')) && (
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={() => {
+                              setRenameTitle(inv.title);
+                              setShowRenameModal({ id: inv.id, title: inv.title });
+                            }}
+                            className="p-2 border border-black/10 hover:border-black transition-all opacity-0 group-hover:opacity-100"
+                            title="Rename"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                          {inv.id.startsWith('local-') && investigations.length > 1 && (
+                            <button 
+                              onClick={() => {
+                                setShowDeleteConfirm({ id: inv.id, title: inv.title });
+                              }}
+                              className="p-2 border border-red-600/10 text-red-600 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
+                              title="Delete Local"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <button 
+                        onClick={() => setCurrentInvestigationId(inv.id)}
+                        className={cn(
+                          "px-4 py-2 text-[9px] font-mono uppercase font-bold border transition-all",
+                          currentInvestigationId === inv.id 
+                            ? "bg-black text-white border-black" 
+                            : "border-black/20 hover:border-black"
+                        )}
+                      >
+                        {currentInvestigationId === inv.id ? "Active" : "Switch To"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button 
+                  onClick={() => {
+                    setNewInvestigationTitle("");
+                    setShowNewInvestigationModal(true);
+                  }}
+                  className="flex items-center justify-center gap-2 p-4 border border-dashed border-black/20 hover:border-black transition-all text-[10px] font-mono uppercase opacity-60 hover:opacity-100"
+                >
+                  <Plus className="w-4 h-4" />
+                  {user ? "New Investigation" : "Reset Local Session (New Title)"}
+                </button>
+              </div>
+            </div>
+
+            {/* Active Investigation Collaborators */}
+            {user && currentInvestigationId && !currentInvestigationId.startsWith('local-') && (
+              <div className="space-y-4 pt-8 border-t border-black/10">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-[10px] font-mono uppercase font-bold opacity-40">Active Investigation Collaborators</h4>
+                  <div className="flex items-center gap-1">
+                    <Users className="w-3 h-3 opacity-40" />
+                    <span className="text-[8px] font-mono uppercase opacity-40">
+                      {investigations.find(i => i.id === currentInvestigationId)?.collaboratorEmails?.length || 0} Total
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="grid gap-2">
+                  {investigations.find(i => i.id === currentInvestigationId)?.collaboratorEmails?.map(email => {
+                    const isOwner = investigations.find(i => i.id === currentInvestigationId)?.ownerId === user.uid;
+                    const isMe = email === user.email;
+                    
+                    return (
+                      <div key={email} className="flex items-center justify-between p-4 border border-black/5 bg-stone-50/50">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-stone-200 flex items-center justify-center border border-black/10">
+                            <Users className="w-4 h-4 opacity-40" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold">{email}</p>
+                            <p className="text-[8px] font-mono uppercase opacity-40">
+                              {isMe ? "You" : "Collaborator"}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        {isOwner && !isMe && (
+                          <button 
+                            onClick={async () => {
+                              try {
+                                await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+                                  collaboratorEmails: arrayRemove(email)
+                                });
+                              } catch (err) {
+                                handleFirestoreError(err, OperationType.UPDATE, `investigations/${currentInvestigationId}`);
+                              }
+                            }}
+                            className="p-2 text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-all flex items-center gap-2 text-[9px] font-mono uppercase font-bold"
+                            title="Remove Collaborator"
+                          >
+                            <X className="w-3 h-3" />
+                            Kick
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  
+                  {(!investigations.find(i => i.id === currentInvestigationId)?.collaboratorEmails || investigations.find(i => i.id === currentInvestigationId)?.collaboratorEmails?.length === 0) && (
+                    <div className="p-8 text-center border border-dashed border-black/10 opacity-30">
+                      <p className="text-[10px] font-mono uppercase">No collaborators added to this investigation.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+        </section>
 
         {/* AI Connection */}
         <section className="p-8 border border-black bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">

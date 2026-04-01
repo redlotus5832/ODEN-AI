@@ -1,5 +1,5 @@
 {
   "name": "ODEN Research System",
-  "description": "A high-fidelity AI research agent designed for deep-dive investigations, pattern recognition, and automated dossier building.",
+  "description": "A high-fidelity collaborative AI research agent designed for deep-dive investigations, real-time multi-user pattern recognition, and automated dossier building.",
   "requestFramePermissions": []
 }

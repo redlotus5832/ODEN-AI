@@ -116,6 +116,9 @@ export interface Request {
   mailing_address?: string;
   fingerprint: string;
   createdAt: string;
+  verification_status?: 'Verified' | 'Unverified' | 'Guess';
+  alternative_contacts?: { type: string; value: string }[];
+  verification_source?: string;
 }
 
 export interface ResearchResponse {
@@ -147,4 +150,28 @@ export interface ChatMessage {
     label: string;
     data: any;
   }[];
+}
+
+export interface Investigation {
+  id: string;
+  title: string;
+  ownerId: string;
+  collaborators?: string[];
+  collaboratorEmails?: string[];
+  claim: string;
+  data: ResearchResponse | null;
+  chatMessages: ChatMessage[];
+  requests: Request[];
+  sources: Source[];
+  researchPoints: InvestigationItem[];
+  suggestions: Suggestions;
+  updatedAt: any;
+}
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  displayName?: string;
+  photoURL?: string;
+  investigationIds?: string[];
 }

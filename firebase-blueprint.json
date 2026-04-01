@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "Investigation": {
+      "title": "Investigation",
+      "description": "A collaborative research project.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique ID of the investigation." },
+        "title": { "type": "string", "description": "The title of the investigation." },
+        "ownerId": { "type": "string", "description": "The UID of the creator." },
+        "collaborators": { "type": "array", "items": { "type": "string" }, "description": "List of collaborator UIDs." },
+        "collaboratorEmails": { "type": "array", "items": { "type": "string" }, "description": "List of collaborator emails for inviting." },
+        "claim": { "type": "string", "description": "The current research claim." },
+        "data": { "type": "object", "description": "The synthesized research data." },
+        "chatMessages": { "type": "array", "items": { "type": "object" }, "description": "The history of chat messages." },
+        "requests": { "type": "array", "items": { "type": "object" }, "description": "The list of archival and FOIA requests." },
+        "sources": { "type": "array", "items": { "type": "object" }, "description": "The list of research sources." },
+        "researchPoints": { "type": "array", "items": { "type": "object" }, "description": "The list of investigation items." },
+        "suggestions": { "type": "object", "description": "The AI-generated research suggestions." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "The last time the investigation was updated." }
+      },
+      "required": ["id", "ownerId", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Metadata and investigation list for a user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "investigationIds": { "type": "array", "items": { "type": "string" }, "description": "List of investigations the user has access to." }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/investigations/{investigationId}": {
+      "schema": "Investigation",
+      "description": "Stores individual research projects."
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user-specific metadata and their project list."
+    }
+  }
+}

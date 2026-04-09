@@ -53,6 +53,9 @@ export interface Suggestions {
   gaps: { label: string; description: string }[];
   researchAreas: { title: string; description: string; priority: 'High' | 'Medium' | 'Low' }[];
   crossovers: { title: string; description: string; significance: string }[];
+  personnelCrossovers?: { name: string; roles: string[]; significance: string }[];
+  financialCrossovers?: { source: string; target: string; amount?: string; significance: string }[];
+  investigativeOutlook?: string;
   entities: { name: string; type: string; relevance: string }[];
   anomalies: { title: string; description: string; impact: string }[];
   conflicts: { title: string; description: string; resolution: string }[];

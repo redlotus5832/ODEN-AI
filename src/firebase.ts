@@ -17,17 +17,33 @@ import {
   addDoc,
   updateDoc,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  disableNetwork,
+  enableNetwork
 } from 'firebase/firestore';
 
 // Import the Firebase configuration
 import firebaseConfig from '../firebase-applet-config.json';
 
+// Support custom Firebase configuration from localStorage
+let firebaseConfigToUse = firebaseConfig;
+if (typeof window !== 'undefined') {
+  const customConfigStr = localStorage.getItem('oden_custom_firebase_config');
+  if (customConfigStr) {
+    try {
+      firebaseConfigToUse = JSON.parse(customConfigStr);
+      console.log("ODEN: Using custom Firebase configuration.");
+    } catch (e) {
+      console.error("ODEN: Failed to parse custom Firebase config:", e);
+    }
+  }
+}
+
 // Initialize Firebase SDK
-const app = initializeApp(firebaseConfig);
+const app = initializeApp(firebaseConfigToUse);
 
 // Initialize Firestore with settings
-export const db = initializeFirestore(app, {}, firebaseConfig.firestoreDatabaseId || '(default)');
+export const db = initializeFirestore(app, {}, firebaseConfigToUse.firestoreDatabaseId || '(default)');
 
 // Enable offline persistence
 enableIndexedDbPersistence(db).catch((err) => {
@@ -59,7 +75,9 @@ export {
   addDoc,
   updateDoc,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  disableNetwork,
+  enableNetwork
 };
 
 export type { User, FirestoreError };

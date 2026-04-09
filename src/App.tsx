@@ -7,7 +7,7 @@ import { twMerge } from 'tailwind-merge';
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { normalizeInstitution, generateFingerprint } from "./utils/normalization";
 import { ResearchResponse, EvidenceRecord, BridgeCandidate, Request, Source, ChatMessage, InvestigationItem, SubClaim, Suggestions, Investigation, UserProfile } from './types';
-import { auth, db, googleProvider, signInWithPopup, onAuthStateChanged, doc, setDoc, getDoc, onSnapshot, User, FirestoreError, collection, query, where, getDocs, addDoc, updateDoc, arrayUnion, arrayRemove, disableNetwork, enableNetwork } from './firebase';
+import { auth, db, googleProvider, signInWithPopup, onAuthStateChanged, doc, setDoc, getDoc, onSnapshot, User, FirestoreError, collection, query, where, or, getDocs, addDoc, updateDoc, arrayUnion, arrayRemove, disableNetwork, enableNetwork } from './firebase';
 import { serverTimestamp, Timestamp } from 'firebase/firestore';
 import mammoth from 'mammoth';
 
@@ -73,8 +73,10 @@ function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const signIn = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      console.error("Sign in failed", error);
+    } catch (error: any) {
+      if (error.code !== 'auth/popup-closed-by-user') {
+        console.error("Sign in failed", error);
+      }
     }
   };
 
@@ -170,6 +172,57 @@ function safeJsonParse<T>(json: string | null, fallback: T): T {
     return fallback;
   }
 }
+
+// --- UI Components ---
+const SourceCard = ({ source, onEdit, onDelete, onView }: { source: Source, onEdit?: (s: Source) => void, onDelete?: (id: string) => void, onView?: (s: Source) => void }) => (
+  <div className={cn(
+    "border border-black p-6 group relative transition-all h-full flex flex-col",
+    source.type === 'Upload' ? "bg-black/5" : "bg-white"
+  )}>
+    <div className="flex justify-between items-start mb-2">
+      <div className="flex gap-2 flex-wrap">
+        <span className={cn(
+          "text-[8px] font-mono px-1 uppercase",
+          source.type === 'Upload' ? "bg-black text-white" : "bg-black/10 text-black"
+        )}>{source.type}</span>
+        {source.classification && <span className="text-[8px] font-mono bg-blue-500 text-white px-1 uppercase">{source.classification}</span>}
+        {source.url === 'Local File' && <span className="text-[8px] font-mono bg-emerald-500 text-white px-1 uppercase">Local</span>}
+      </div>
+      <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+        {onView && (
+          <button 
+            onClick={() => onView(source)} 
+            className="p-1 hover:bg-black/5"
+            title="View Full Document"
+          >
+            <BookOpen className="w-3 h-3" />
+          </button>
+        )}
+        {onEdit && <button onClick={() => onEdit(source)} className="p-1 hover:bg-black/5"><Edit3 className="w-3 h-3" /></button>}
+        {onDelete && <button onClick={() => onDelete(source.id)} className="p-1 hover:bg-red-50 text-red-600"><Trash2 className="w-3 h-3" /></button>}
+      </div>
+    </div>
+    <h4 className="font-serif italic text-lg mb-2 line-clamp-2">{source.title}</h4>
+    <div className="space-y-1 mb-4">
+      {source.institution_normalized && <p className="text-[9px] font-mono uppercase opacity-50">Institution: <span className="text-black opacity-100">{source.institution_normalized}</span></p>}
+      {source.department && <p className="text-[9px] font-mono uppercase opacity-50">Department: <span className="text-black opacity-100">{source.department}</span></p>}
+      {source.physical_location && <p className="text-[9px] font-mono uppercase opacity-50">Location: <span className="text-black opacity-100 italic">{source.physical_location}</span></p>}
+    </div>
+    <div className="mt-auto">
+      {source.url !== 'Local File' ? (
+        <a href={source.url} target="_blank" rel="noreferrer" className="text-[10px] font-mono text-blue-600 hover:underline break-all block mb-4">
+          {source.url}
+        </a>
+      ) : (
+        <div className="flex items-center gap-2 text-[10px] font-mono opacity-40 mb-4">
+          <FileText className="w-3 h-3" />
+          <span>Internal Document</span>
+        </div>
+      )}
+      {source.notes && <p className="text-xs opacity-60 italic border-l border-black/20 pl-3 line-clamp-3">{source.notes}</p>}
+    </div>
+  </div>
+);
 
 // --- Error Boundary ---
 declare global {
@@ -538,6 +591,7 @@ function ODENApp() {
   
   const [sourceSearch, setSourceSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'All' | 'Primary' | 'Secondary' | 'Archive' | 'Upload' | 'Other'>('All');
+  const [sourceGroupBy, setSourceGroupBy] = useState<'None' | 'Institution' | 'Type'>('None');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showNewInvestigationModal, setShowNewInvestigationModal] = useState(false);
   const [newInvestigationTitle, setNewInvestigationTitle] = useState('');
@@ -634,7 +688,10 @@ function ODENApp() {
         // Listen for investigations where user is owner or collaborator
         const q = query(
           collection(db, 'investigations'),
-          where('collaboratorEmails', 'array-contains', user.email)
+          or(
+            where('ownerId', '==', user.uid),
+            where('collaboratorEmails', 'array-contains', user.email)
+          )
         );
         
         unsubInvs = onSnapshot(q, (snapshot) => {
@@ -1772,11 +1829,13 @@ function ODENApp() {
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
-          3. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows). These are the structural pillars of any institutional pattern.
-          4. STRATEGIC COLLABORATION: Act as a research assistant. Discuss theories, suggest research paths, and provide context beyond just record fetching. If the user is brainstorming, engage in the discussion without always needing to trigger a new record or action.
-          5. ACKNOWLEDGE HISTORY: Look at the CHAT HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
-          6. INVESTIGATIVE NARRATIVE: Open with a narrative assessment of the findings (e.g., "This is a genuinely fascinating and frustrating record gap"). Synthesize information into thematic sections (e.g., "The Scale," "The Institutional Response," "What Actually Survives").
-          7. CROSSOVER ANALYSIS: Explicitly point out personnel crossovers (dual roles) and financial crossovers (inter-agency fund flows).
+          3. EXHAUSTIVE SOURCING (MANDATORY): Never summarize away sources. If multiple documents or links support a claim, list ALL of them in the 'citations' array and generate 'add_evidence' actions for EACH one. If you find 10 relevant links, provide 10 citations.
+          4. DEEP REASONING (CRITICAL): In your 'reasoning' field, provide a detailed "Chain of Evidence". Explain the "Why" and "How" of every connection. Detail the structural logic: "We are looking at Agency X because Person Y (who we found in the board of Company Z) was the director there in 1954."
+          5. FOLLOW THE ACTORS & CAPITAL: Explicitly identify key people (actors) and money trails (financial flows). These are the structural pillars of any institutional pattern.
+          6. STRATEGIC COLLABORATION: Act as a research assistant. Discuss theories, suggest research paths, and provide context beyond just record fetching. If the user is brainstorming, engage in the discussion without always needing to trigger a new record or action.
+          7. ACKNOWLEDGE HISTORY: Look at the CHAT HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
+          8. INVESTIGATIVE NARRATIVE: Open with a narrative assessment of the findings (e.g., "This is a genuinely fascinating and frustrating record gap"). Synthesize information into thematic sections (e.g., "The Scale," "The Institutional Response," "What Actually Survives").
+          9. CROSSOVER ANALYSIS: Explicitly point out personnel crossovers (dual roles) and financial crossovers (inter-agency fund flows).
           8. STRUCTURAL PROBLEM CONCLUSION: Map findings back to the core methodology—explaining how the record destruction or absence fits into a system built for untraceability.
           9. AUTOMATIC POPULATION (CRITICAL): For EVERY new record, finding, or institutional detail you discover in the search results, you MUST generate a corresponding 'add_evidence' or 'add_request' action. Do not just describe them in the response; populate the system with them.
           
@@ -2744,10 +2803,12 @@ function ODENApp() {
         
         GOALS:
         1. Generate 10-15 Evidence Records (Dossier items) with detailed context.
+           * EXHAUSTIVE SOURCING (MANDATORY): Do not limit yourself to 2-3 sources. If you found 10-15 relevant archival entries, finding aids, or documents, you MUST create a record for EACH one. Every unique piece of evidence found during the search must be represented.
            * CRITICAL: 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
            * CRITICAL: 'citation_url' MUST be the direct link to the record or finding.
            * CRITICAL: 'connection_logic' and 'significance' are MANDATORY.
         2. Perform a Structural Analysis (Bridges, Gaps, Anomalies).
+           * DEEP REASONING (CRITICAL): In the 'summary' and 'connection_logic' fields, provide a detailed "paper trail" of your logic. Explain the structural logic—why you connected Person A to Institution B, and what specific administrative "shadow" you are chasing.
            * CROSSOVER ANALYSIS (CRITICAL): Explicitly identify personnel crossovers (dual roles, board memberships) and financial crossovers (inter-agency fund flows, corporate-government contracts). Look for "Bridges" (the same person or entity appearing in two different, seemingly independent domains).
         3. Draft 3-5 comprehensive FOIA requests for the identified gaps.
            * FOIA DRAFTING PROTOCOL (STRICT):
@@ -2786,7 +2847,7 @@ function ODENApp() {
           "analysis": {
             "bridges": [{"label": "Bridge", "reason": "Logic...", "records": ["Record ID"]}],
             "institutionalGaps": [{"label": "Gap", "description": "Missing records..."}],
-            "summary": "Overall synthesis...",
+            "summary": "Overall synthesis and Chain of Evidence. Explain the structural logic—why you connected Person A to Institution B, and what specific administrative 'shadow' you are chasing. Provide a detailed 'paper trail' of your logic.",
             "patternRecognition": [{"title": "Pattern", "description": "Observed trend..."}]
           },
           "requests": [
@@ -3206,9 +3267,11 @@ function ODENApp() {
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
-          3. DOMAIN-AGNOSTIC RESEARCH: Treat ALL domains (Historical, Corporate, Legal, Financial, Scientific, Political) as systems of records to be mapped. Follow the administrative footprint wherever it leads.
-          4. DEEP SYNTHESIS: Incorporate real-time monitoring, personnel backgrounding, financial mapping, and geospatial context found in the search findings.
-          5. CROSSOVER ANALYSIS (CRITICAL): Explicitly identify personnel crossovers (dual roles, board memberships) and financial crossovers (inter-agency fund flows, corporate-government contracts). Look for "Bridges" (the same person or entity appearing in two different, seemingly independent domains).
+          3. EXHAUSTIVE SOURCING (MANDATORY): Never summarize away sources. If multiple documents or links support a claim, list ALL of them in the 'citations' array and generate 'add_evidence' actions for EACH one. If you find 10 relevant links, provide 10 citations.
+          4. DEEP REASONING (CRITICAL): In your 'reasoning' field, provide a detailed "Chain of Evidence". Explain the "Why" and "How" of every connection. Detail the structural logic: "We are looking at Agency X because Person Y (who we found in the board of Company Z) was the director there in 1954."
+          5. DOMAIN-AGNOSTIC RESEARCH: Treat ALL domains (Historical, Corporate, Legal, Financial, Scientific, Political) as systems of records to be mapped. Follow the administrative footprint wherever it leads.
+          6. DEEP SYNTHESIS: Incorporate real-time monitoring, personnel backgrounding, financial mapping, and geospatial context found in the search findings.
+          7. CROSSOVER ANALYSIS (CRITICAL): Explicitly identify personnel crossovers (dual roles, board memberships) and financial crossovers (inter-agency fund flows, corporate-government contracts). Look for "Bridges" (the same person or entity appearing in two different, seemingly independent domains).
           6. STRATEGIC COLLABORATION: Act as a research assistant. Discuss theories, suggest research paths, and provide context beyond just record fetching. If the user is brainstorming, engage in the discussion without always needing to trigger a new record or action.
           7. ACKNOWLEDGE HISTORY: Look at the CONVERSATION HISTORY. Do not repeat yourself. If the user repeats a point, they are asking for MORE DEPTH or a NEW ANGLE. Acknowledge what was already discussed.
           8. INVESTIGATIVE NARRATIVE: Open with a narrative assessment of the findings. Synthesize information into thematic sections (e.g., "The Scale," "The Institutional Response," "What Actually Survives").
@@ -5302,23 +5365,38 @@ function ODENApp() {
                           </div>
                         )}
                         {msg.citations && msg.citations.length > 0 && (
-                          <div className="mt-4 pt-4 border-t border-black/10 space-y-2">
+                          <div className="mt-4 pt-4 border-t border-black/10 space-y-3">
                             <p className="text-[8px] font-mono uppercase opacity-40 flex items-center gap-1">
-                              <BookOpen className="w-2 h-2" /> Supporting Sources
+                              <BookOpen className="w-2 h-2" /> Supporting Sources & Archival Findings
                             </p>
-                            <div className="flex flex-wrap gap-2">
-                              {msg.citations.map((cite, idx) => (
-                                <a 
-                                  key={`cite-${idx}`}
-                                  href={cite.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="flex items-center gap-2 px-2 py-1 bg-black/5 hover:bg-black hover:text-white transition-all border border-black/10 text-[9px] font-mono"
-                                >
-                                  <LinkIcon className="w-2 h-2" />
-                                  <span className="truncate max-w-[150px]">{cite.title}</span>
-                                </a>
-                              ))}
+                            <div className="space-y-3">
+                              {(() => {
+                                const groups: Record<string, any[]> = {};
+                                msg.citations.forEach((cite: any) => {
+                                  const inst = cite.institution || 'General Sources';
+                                  if (!groups[inst]) groups[inst] = [];
+                                  groups[inst].push(cite);
+                                });
+                                return Object.entries(groups).map(([inst, cites]) => (
+                                  <div key={inst} className="space-y-1.5">
+                                    <p className="text-[7px] font-mono uppercase opacity-30 tracking-widest">{inst}</p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {cites.map((cite, idx) => (
+                                        <a 
+                                          key={`cite-${idx}`}
+                                          href={cite.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="flex items-center gap-2 px-2 py-1 bg-black/5 hover:bg-black hover:text-white transition-all border border-black/10 text-[9px] font-mono group/cite"
+                                        >
+                                          <LinkIcon className="w-2 h-2 opacity-40 group-hover/cite:opacity-100" />
+                                          <span className="truncate max-w-[150px]">{cite.title}</span>
+                                        </a>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ));
+                              })()}
                             </div>
                           </div>
                         )}
@@ -5604,6 +5682,18 @@ function ODENApp() {
                           <option value="Other">Other</option>
                         </select>
                       </div>
+                      <div className="flex items-center gap-2">
+                        <LayoutGrid className="w-4 h-4 opacity-30" />
+                        <select 
+                          value={sourceGroupBy}
+                          onChange={(e) => setSourceGroupBy(e.target.value as any)}
+                          className="bg-black/5 border border-black/10 p-3 text-xs font-mono uppercase focus:outline-none focus:border-black transition-all"
+                        >
+                          <option value="None">No Grouping</option>
+                          <option value="Institution">By Institution</option>
+                          <option value="Type">By Type</option>
+                        </select>
+                      </div>
                     </div>
 
                     {sources.length === 0 ? (
@@ -5612,57 +5702,63 @@ function ODENApp() {
                         <p className="font-serif italic text-lg">No sources logged. Keep track of your evidence here.</p>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {sources.filter(s => {
-                          const matchesSearch = (s.title || '').toLowerCase().includes((sourceSearch || '').toLowerCase()) || 
-                                               (s.notes || '').toLowerCase().includes((sourceSearch || '').toLowerCase());
-                          const matchesFilter = sourceFilter === 'All' || s.type === sourceFilter;
-                          return matchesSearch && matchesFilter;
-                        }).map(source => (
-                          <div key={source.id} className={cn(
-                            "border border-black p-6 group relative transition-all",
-                            source.type === 'Upload' ? "bg-black/5" : "bg-white"
-                          )}>
-                            <div className="flex justify-between items-start mb-2">
-                              <div className="flex gap-2">
-                                <span className={cn(
-                                  "text-[8px] font-mono px-1 uppercase",
-                                  source.type === 'Upload' ? "bg-black text-white" : "bg-black/10 text-black"
-                                )}>{source.type}</span>
-                                {source.classification && <span className="text-[8px] font-mono bg-blue-500 text-white px-1 uppercase">{source.classification}</span>}
-                                {source.url === 'Local File' && <span className="text-[8px] font-mono bg-emerald-500 text-white px-1 uppercase">Local</span>}
+                      <div className="space-y-12">
+                        {(() => {
+                          const filteredSources = sources.filter(s => {
+                            const matchesSearch = (s.title || '').toLowerCase().includes((sourceSearch || '').toLowerCase()) || 
+                                                 (s.notes || '').toLowerCase().includes((sourceSearch || '').toLowerCase());
+                            const matchesFilter = sourceFilter === 'All' || s.type === sourceFilter;
+                            return matchesSearch && matchesFilter;
+                          });
+
+                          if (sourceGroupBy === 'None') {
+                            return (
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {filteredSources.map(source => (
+                                  <SourceCard 
+                                    key={source.id} 
+                                    source={source} 
+                                    onEdit={setEditingSource}
+                                    onDelete={deleteSource}
+                                    onView={setViewingSource}
+                                  />
+                                ))}
                               </div>
-                              <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                                <button 
-                                  onClick={() => setViewingSource(source)} 
-                                  className="p-1 hover:bg-black/5"
-                                  title="View Full Document"
-                                >
-                                  <BookOpen className="w-3 h-3" />
-                                </button>
-                                <button onClick={() => setEditingSource(source)} className="p-1 hover:bg-black/5"><Edit3 className="w-3 h-3" /></button>
-                                <button onClick={() => deleteSource(source.id)} className="p-1 hover:bg-red-50 text-red-600"><Trash2 className="w-3 h-3" /></button>
+                            );
+                          }
+
+                          const groups: Record<string, Source[]> = {};
+                          filteredSources.forEach(s => {
+                            const key = sourceGroupBy === 'Institution' 
+                              ? (s.institution_normalized || 'Unspecified Institution')
+                              : (s.type || 'Other');
+                            if (!groups[key]) groups[key] = [];
+                            groups[key].push(s);
+                          });
+
+                          return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b)).map(([groupName, groupSources]) => (
+                            <div key={groupName} className="space-y-6">
+                              <div className="flex items-center gap-4">
+                                <h3 className="text-xs font-mono uppercase font-bold tracking-[0.2em] bg-black text-white px-3 py-1">
+                                  {groupName}
+                                </h3>
+                                <div className="h-[1px] flex-1 bg-black/10" />
+                                <span className="text-[10px] font-mono opacity-40">{groupSources.length} Sources</span>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {groupSources.map(source => (
+                                  <SourceCard 
+                                    key={source.id} 
+                                    source={source} 
+                                    onEdit={setEditingSource}
+                                    onDelete={deleteSource}
+                                    onView={setViewingSource}
+                                  />
+                                ))}
                               </div>
                             </div>
-                            <h4 className="font-serif italic text-lg mb-2">{source.title}</h4>
-                            <div className="space-y-1 mb-4">
-                              {source.institution_normalized && <p className="text-[9px] font-mono uppercase opacity-50">Institution: <span className="text-black opacity-100">{source.institution_normalized}</span></p>}
-                              {source.department && <p className="text-[9px] font-mono uppercase opacity-50">Department: <span className="text-black opacity-100">{source.department}</span></p>}
-                              {source.physical_location && <p className="text-[9px] font-mono uppercase opacity-50">Location: <span className="text-black opacity-100 italic">{source.physical_location}</span></p>}
-                            </div>
-                            {source.url !== 'Local File' ? (
-                              <a href={source.url} target="_blank" rel="noreferrer" className="text-[10px] font-mono text-blue-600 hover:underline break-all block mb-4">
-                                {source.url}
-                              </a>
-                            ) : (
-                              <div className="flex items-center gap-2 text-[10px] font-mono opacity-40 mb-4">
-                                <FileText className="w-3 h-3" />
-                                <span>Internal Document</span>
-                              </div>
-                            )}
-                            {source.notes && <p className="text-xs opacity-60 italic border-l border-black/20 pl-3">{source.notes}</p>}
-                          </div>
-                        ))}
+                          ));
+                        })()}
                       </div>
                     )}
                   </section>

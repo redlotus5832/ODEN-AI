@@ -602,6 +602,7 @@ function ODENApp() {
   }, []);
 
   const [aiConnected, setAiConnected] = useState(false);
+  const [apiKeySource, setApiKeySource] = useState<'none' | 'custom' | 'platform' | 'managed'>('none');
   const [customGeminiKey, setCustomGeminiKey] = useState(() => safeStorage.getItem('oden_custom_gemini_key') || '');
   const [bypassPlatformKey, setBypassPlatformKey] = useState(() => safeStorage.getItem('oden_bypass_platform_key') === 'true');
   const [customFirebaseConfig, setCustomFirebaseConfig] = useState(() => safeStorage.getItem('oden_custom_firebase_config') || '');
@@ -965,7 +966,21 @@ function ODENApp() {
 
   useEffect(() => {
     safeStorage.setItem('oden_bypass_platform_key', String(bypassPlatformKey));
-  }, [bypassPlatformKey]);
+    
+    if (customGeminiKey) {
+      setApiKeySource('custom');
+      setAiConnected(true);
+    } else if (bypassPlatformKey) {
+      setApiKeySource('none');
+      setAiConnected(false);
+    } else if (process.env.GEMINI_API_KEY) {
+      setApiKeySource('platform');
+      setAiConnected(true);
+    } else {
+      setApiKeySource('none');
+      setAiConnected(false);
+    }
+  }, [customGeminiKey, bypassPlatformKey]);
 
   useEffect(() => {
     safeStorage.setItem('oden_custom_firebase_config', customFirebaseConfig);
@@ -1082,7 +1097,7 @@ function ODENApp() {
   const getGenAI = () => {
     const apiKey = customGeminiKey || (bypassPlatformKey ? undefined : process.env.GEMINI_API_KEY);
     if (!apiKey) {
-      throw new Error("Gemini API Key is missing. Please ensure it is configured in the environment or Settings (Custom Infrastructure). If you want to use the Free Tier, try clicking 'Connect AI Engine' above.");
+      throw new Error("Gemini API Key is missing. This usually happens if you've cleared your keys but haven't 'Connected' to the platform's free tier. Click 'Connect AI Engine' in Settings to restore access.");
     }
     return new GoogleGenAI({ apiKey });
   };
@@ -1222,7 +1237,7 @@ function ODENApp() {
       7. ENTITY RECOGNITION: Identify real people, agencies, and dates.
       8. INSTITUTION NORMALIZATION: Use canonical names.
       9. INVESTIGATIVE NARRATIVE: Use natural, engaging language to describe findings and their significance.
-      10. URL INTEGRITY & SOURCE LOCK (CRITICAL): NEVER hallucinate or guess a URL. ONLY use exact URLs found in the raw Google Search tool output. If no URL is found, state: '[URL NOT FOUND IN SEARCH]'.
+      10. URL INTEGRITY & SOURCE LOCK (CRITICAL): NEVER hallucinate or guess a URL. ONLY use exact URLs found in the raw Google Search tool output. If you find information on a website, news outlet, or public database, you MUST provide the direct URL in the 'citation_url' field. If no URL is found, state: '[URL NOT FOUND IN SEARCH]'.
       
       Use Google Search to find the specific record at the expected location.
       Output ONLY valid JSON: { 
@@ -1330,9 +1345,10 @@ function ODENApp() {
       - URL INTEGRITY & SOURCE LOCK (CRITICAL): 
         1. NO HALLUCINATIONS: NEVER guess, construct, or "helpfully" provide a URL.
         2. SOURCE LOCK: ONLY use exact URLs found in the raw Google Search tool output.
-        3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, or context sources.
-        4. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
-        5. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
+        3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, news articles, and context sources.
+        4. MANDATORY WEB LINKS: If you find information on a website, news outlet, or public database, you MUST provide the direct URL in the 'citation_url' or 'url' fields. Do not just provide archival metadata if a web source is available.
+        5. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
+        6. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
       - UNIVERSAL CITATIONS: Every historical claim, entity, or institutional detail surfaced MUST be backed by an entry in the 'citations' array.
       - NO CONFLATION: Be extremely precise with entities. Do NOT conflate related but distinct individuals or organizations (e.g., do not conflate Phoebe Hearst with William Randolph Hearst; they represent different institutional agencies).
       - PRECISION: Be exact with dates, figures, and acreage. If a figure is uncertain, state the range or label it as [INFERRED].
@@ -1847,12 +1863,13 @@ function ODENApp() {
         TASK: Perform a deep-dive search to find specific institutional details, FOIA contact emails, Record Group numbers, and archival locations related to this inquiry. Provide a detailed summary of your findings.` }] }
         ],
         config: {
-          systemInstruction: `You are the ODEN Discovery Engine. Your sole task is to find REAL institutional details using Google Search. 
+          systemInstruction: `You are the ODEN Discovery Engine. Your sole task is to find REAL institutional details and source materials using Google Search. 
           Focus on:
-          1. FOIA contact emails and mailing addresses.
-          2. Specific Record Groups (RG) or Accession numbers.
-          3. Department names and specific offices.
-          4. Direct links to archival finding aids.
+          1. DIRECT SOURCE LINKS: Find the exact URLs for web pages, news articles, digitized records, and finding aids. (MANDATORY: Provide the direct URL for every piece of information found.)
+          2. FOIA contact emails and mailing addresses.
+          3. Specific Record Groups (RG) or Accession numbers.
+          4. Department names and specific offices.
+          5. Direct links to archival finding aids.
           
           URL INTEGRITY (CRITICAL): NEVER hallucinate or guess a URL. ONLY use the exact URLs provided in the Google Search results. If a URL is not found, state that it is missing rather than providing a placeholder or a dead link.
           
@@ -1906,9 +1923,10 @@ function ODENApp() {
           - URL INTEGRITY & SOURCE LOCK (CRITICAL): 
             1. NO HALLUCINATIONS: NEVER guess, construct, or "helpfully" provide a URL.
             2. SOURCE LOCK: ONLY use exact URLs found in the raw Google Search tool output.
-            3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, or context sources.
-            4. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
-            5. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
+            3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, news articles, and context sources.
+            4. MANDATORY WEB LINKS: If you find information on a website, news outlet, or public database, you MUST provide the direct URL in the 'citation_url' or 'url' fields. Do not just provide archival metadata if a web source is available.
+            5. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
+            6. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
           - UNIVERSAL CITATIONS: Every historical claim, entity, or institutional detail surfaced MUST be backed by an entry in the 'citations' array.
           - NO CONFLATION: Be extremely precise with entities. Do NOT conflate related but distinct individuals or organizations (e.g., do not conflate Phoebe Hearst with William Randolph Hearst; they represent different institutional agencies).
           - PRECISION: Be exact with dates, figures, and acreage. If a figure is uncertain, state the range or label it as [INFERRED].
@@ -2850,7 +2868,7 @@ function ODENApp() {
         TASKS:
         1. Break it down into 3-5 testable sub-claims.
         2. For each sub-claim, generate a research blueprint (checklist of records to find).
-        3. Use the googleSearch tool to find real, primary source links for these records.
+        3. Use the googleSearch tool to find real, primary source links and direct website URLs for these records. (MANDATORY: Provide the direct URL for every piece of information found.)
         4. DEEP INVESTIGATIVE SEARCH:
            - REAL-TIME MONITORING: Search for declassification announcements, recent news, or press releases (last 24 months) related to the entities.
            - PERSONNEL BACKGROUNDING: Identify key actors and search for career histories, board memberships, and public statements indicating institutional crossovers.
@@ -3319,12 +3337,12 @@ function ODENApp() {
           { parts: [{ text: `CONTEXT:\n${filesContext.slice(0, 10000)}${dataContext.slice(0, 5000)}${sourcesContext.slice(0, 3000)}${investigationContext.slice(0, 3000)}${requestsContext.slice(0, 3000)}${historyContext.slice(0, 5000)}\n\nCURRENT INQUIRY: ${userMsg}\n\nTASK: Perform a deep-dive search to find specific institutional details, FOIA contact emails, Record Group numbers, and archival locations related to this inquiry. Provide a detailed summary of your findings.` }] }
         ],
         config: {
-          systemInstruction: `You are the ODEN Discovery Engine. Your sole task is to find REAL institutional details using Google Search and the NARA Catalog. 
+          systemInstruction: `You are the ODEN Discovery Engine. Your sole task is to find REAL institutional details and source materials using Google Search and the NARA Catalog. 
           Focus on:
-          1. FOIA contact emails and mailing addresses. (MANDATORY: Use Google Search to verify the current FOIA email for the specific agency/office. Cross-reference with official institutional websites.)
-          2. Specific Record Groups (RG) or Accession numbers.
-          3. Department names and specific offices.
-          4. Direct links to archival finding aids.
+          1. DIRECT SOURCE LINKS: Find the exact URLs for web pages, news articles, digitized records, and finding aids. (MANDATORY: Provide the direct URL for every piece of information found.)
+          2. FOIA contact emails and mailing addresses. (MANDATORY: Use Google Search to verify the current FOIA email for the specific agency/office. Cross-reference with official institutional websites.)
+          3. Specific Record Groups (RG) or Accession numbers.
+          4. Department names and specific offices.
           5. DEEP INVESTIGATIVE SEARCH:
              - REAL-TIME MONITORING: Search for declassification announcements, recent news, or press releases (last 24 months) related to the inquiry.
              - PERSONNEL BACKGROUNDING: Identify key actors and search for career histories, board memberships, and public statements indicating institutional crossovers.
@@ -3404,9 +3422,10 @@ function ODENApp() {
           - URL INTEGRITY & SOURCE LOCK (CRITICAL): 
             1. NO HALLUCINATIONS: NEVER guess, construct, or "helpfully" provide a URL.
             2. SOURCE LOCK: ONLY use exact URLs found in the raw Google Search tool output.
-            3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, or context sources.
-            4. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
-            5. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
+            3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, news articles, and context sources.
+            4. MANDATORY WEB LINKS: If you find information on a website, news outlet, or public database, you MUST provide the direct URL in the 'citation_url' or 'url' fields. Do not just provide archival metadata if a web source is available.
+            5. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
+            6. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
           - UNIVERSAL CITATIONS: Every historical claim, entity, or institutional detail surfaced MUST be backed by an entry in the 'citations' array.
           - NO CONFLATION: Be extremely precise with entities. Do NOT conflate related but distinct individuals or organizations (e.g., do not conflate Phoebe Hearst with William Randolph Hearst; they represent different institutional agencies).
           - PRECISION: Be exact with dates, figures, and acreage. If a figure is uncertain, state the range or label it as [INFERRED].
@@ -6162,6 +6181,7 @@ function ODENApp() {
                 handleFirestoreError={handleFirestoreError}
                 quotaExceeded={quotaExceeded}
                 setQuotaExceeded={setQuotaExceeded}
+                apiKeySource={apiKeySource}
                 customGeminiKey={customGeminiKey}
                 setCustomGeminiKey={setCustomGeminiKey}
                 bypassPlatformKey={bypassPlatformKey}
@@ -8527,6 +8547,7 @@ function SettingsView({
   handleFirestoreError,
   quotaExceeded,
   setQuotaExceeded,
+  apiKeySource,
   customGeminiKey,
   setCustomGeminiKey,
   bypassPlatformKey,
@@ -8556,6 +8577,7 @@ function SettingsView({
   handleFirestoreError: (error: unknown, operationType: OperationType, path: string | null) => void,
   quotaExceeded: boolean,
   setQuotaExceeded: (val: boolean) => void,
+  apiKeySource: 'none' | 'custom' | 'platform' | 'managed',
   customGeminiKey: string,
   setCustomGeminiKey: (val: string) => void,
   bypassPlatformKey: boolean,
@@ -8905,20 +8927,31 @@ function SettingsView({
         <section className="p-8 border border-black bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
           <div className="flex justify-between items-start mb-6">
             <div className="flex items-center gap-3">
-              <div className={cn("w-3 h-3 rounded-full", aiConnected ? "bg-green-500 animate-pulse" : "bg-blue-500")} />
+              <div className={cn("w-3 h-3 rounded-full", apiKeySource !== 'none' ? "bg-green-500 animate-pulse" : "bg-blue-500")} />
               <h3 className="text-xl font-serif italic">AI Research Engine (Gemini)</h3>
             </div>
-            <span className={cn(
-              "text-[9px] font-mono uppercase px-2 py-1 border",
-              aiConnected ? "bg-green-50 text-green-700 border-green-200" : "bg-blue-50 text-blue-700 border-blue-200"
-            )}>
-              {aiConnected ? "Custom Engine Connected" : "Default Engine Active"}
-            </span>
+            <div className="flex flex-col items-end gap-1">
+              <span className={cn(
+                "text-[9px] font-mono uppercase px-2 py-1 border",
+                apiKeySource !== 'none' ? "bg-green-50 text-green-700 border-green-200" : "bg-blue-50 text-blue-700 border-blue-200"
+              )}>
+                {apiKeySource === 'custom' ? "Custom Key Active" : 
+                 apiKeySource === 'platform' ? "Platform Secret Active" :
+                 apiKeySource === 'managed' ? "Managed Free Tier Active" : "No Engine Connected"}
+              </span>
+              {apiKeySource === 'platform' && (
+                <span className="text-[8px] font-mono text-red-600 uppercase font-bold">Using Platform "Secret"</span>
+              )}
+            </div>
           </div>
           
           <p className="text-sm opacity-70 leading-relaxed mb-8">
             The AI Research Engine powers the deep-dive analysis, pattern recognition, and automated dossier building. 
-            By default, ODEN uses a shared research engine. <strong>You do not need to change this</strong> unless you want to use your own Google Cloud project limits.
+            {apiKeySource === 'platform' && (
+              <span className="block mt-2 p-2 bg-red-50 border border-red-100 text-red-700 text-xs">
+                <strong>Warning:</strong> You have a "Secret" named GEMINI_API_KEY set in the platform sidebar. The app is using this key. If this is your paid key, it will consume your quota. To use the Free Tier, delete that secret or use the "Ignore Platform Secret" toggle below.
+              </span>
+            )}
           </p>
 
           <div className="bg-stone-50 p-6 border border-black/10 mb-8">

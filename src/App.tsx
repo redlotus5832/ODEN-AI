@@ -74,8 +74,17 @@ function FirebaseProvider({ children }: { children: React.ReactNode }) {
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
-      if (error.code !== 'auth/popup-closed-by-user') {
+      if (error.code === 'auth/popup-closed-by-user') {
+        return; // Silently handle user closing the popup
+      }
+      
+      if (error.code === 'auth/unauthorized-domain') {
+        const domain = window.location.hostname;
+        console.error(`ODEN: Domain "${domain}" is not authorized in Firebase Console.`);
+        alert(`Authentication Error: This domain (${domain}) is not authorized for sign-in. \n\nPlease add it to the "Authorized domains" list in your Firebase Console -> Authentication -> Settings.`);
+      } else {
         console.error("Sign in failed", error);
+        alert(`Sign in failed: ${error.message}`);
       }
     }
   };
@@ -109,7 +118,7 @@ function useFirebase() {
 }
 
 // --- Storage Utilities ---
-const safeGenerateContent = async (genAI: any, params: any) => {
+const safeGenerateContent = async (genAI: any, params: any, retries = 3): Promise<any> => {
   try {
     // Truncate text in contents if it's too long to prevent 500/XHR errors
     if (params.contents) {
@@ -129,10 +138,21 @@ const safeGenerateContent = async (genAI: any, params: any) => {
     }
     return await genAI.models.generateContent(params);
   } catch (e: any) {
+    // Handle 503 (Service Unavailable / High Demand) with retries
+    if (retries > 0 && (e.message?.includes('503') || e.message?.includes('UNAVAILABLE'))) {
+      const delay = (4 - retries) * 2000; // Exponential backoff: 2s, 4s, 6s
+      console.warn(`ODEN: Gemini API busy (503). Retrying in ${delay}ms... (${retries} retries left)`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return safeGenerateContent(genAI, params, retries - 1);
+    }
+
     console.error("ODEN: Gemini API Error:", e);
     // Re-throw with a cleaner message if it's a known error type
     if (e.message?.includes('xhr error') || e.message?.includes('500')) {
       throw new Error("The AI service is currently overloaded or the request was too large. Please try a shorter claim or fewer documents.");
+    }
+    if (e.message?.includes('503') || e.message?.includes('UNAVAILABLE')) {
+      throw new Error("The AI service is currently experiencing high demand. Please wait a moment and try again.");
     }
     throw e;
   }
@@ -1201,7 +1221,7 @@ function ODENApp() {
       7. ENTITY RECOGNITION: Identify real people, agencies, and dates.
       8. INSTITUTION NORMALIZATION: Use canonical names.
       9. INVESTIGATIVE NARRATIVE: Use natural, engaging language to describe findings and their significance.
-      10. REAL LINKS: Provide specific, working URLs.
+      10. URL INTEGRITY & SOURCE LOCK (CRITICAL): NEVER hallucinate or guess a URL. ONLY use exact URLs found in the raw Google Search tool output. If no URL is found, state: '[URL NOT FOUND IN SEARCH]'.
       
       Use Google Search to find the specific record at the expected location.
       Output ONLY valid JSON: { 
@@ -1296,6 +1316,26 @@ function ODENApp() {
       10. FOIA GENERATION: Based on the institutional gaps and search findings, draft specific FOIA or Archival requests.
       11. INVESTIGATIVE OUTLOOK: Provide a section on the implications of the findings—what they *could* imply about structural links, gaps, or hidden patterns.
       
+      FACTUAL RIGOR & CATEGORIZATION (MANDATORY):
+      - SELF-CHECK BEFORE OUTPUT (REQUIRED): Before finalizing any output, perform this internal check on every named individual, date, institution, historical claim, and archival citation:
+        1. Does this claim appear in the user-provided data or a source retrieved via Google Search in this session?
+           - If yes: mark it [DOCUMENTED] and cite the source.
+        2. Is it a logical inference from documented data?
+           - If yes: mark it [INFERRED] and explicitly explain the "Structural Logic" or "Nexus" (e.g., "We connect A to B because they share the same business manager in 1905").
+        3. Is it structurally plausible but unverified?
+           - If yes: mark it [CANDIDATE] and flag it requires finding aid or primary source confirmation before use.
+        4. Does it contradict expected institutional logic or contain an unexplained absence?
+           - If yes: mark it [ANOMALY] and preserve it with the flag. Do not suppress anomalies.
+      - URL INTEGRITY & SOURCE LOCK (CRITICAL): 
+        1. NO HALLUCINATIONS: NEVER guess, construct, or "helpfully" provide a URL.
+        2. SOURCE LOCK: ONLY use exact URLs found in the raw Google Search tool output.
+        3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, or context sources.
+        4. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
+        5. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
+      - UNIVERSAL CITATIONS: Every historical claim, entity, or institutional detail surfaced MUST be backed by an entry in the 'citations' array.
+      - NO CONFLATION: Be extremely precise with entities. Do NOT conflate related but distinct individuals or organizations (e.g., do not conflate Phoebe Hearst with William Randolph Hearst; they represent different institutional agencies).
+      - PRECISION: Be exact with dates, figures, and acreage. If a figure is uncertain, state the range or label it as [INFERRED].
+      
       GAP LOGIC (CRITICAL):
       - A "Gap" is not just missing info; it's a "Structural Absence."
       - If Process A leads to Result B, and Record C is the necessary intermediary, its absence is a "Structural Anomaly."
@@ -1304,9 +1344,20 @@ function ODENApp() {
       
       FOIA DRAFTING PROTOCOL (STRICT):
       - Use the specific Record Group (RG), Accession Number, or Office from the search findings.
+      - AGENCY ACCURACY (CRITICAL): Ensure you target the correct parent agency. (e.g., RG 95 Forest Service is USDA, NOT DOI).
+      - CONTACT INTEGRITY (MANDATORY): 
+        * 'destination_email' MUST be a valid email address containing an '@' symbol.
+        * 'submission_portal' MUST be a URL (e.g., securefoia.doi.gov).
+        * NEVER put a portal URL in the 'destination_email' field.
       - Use professional, archival terminology.
-      - Body MUST be 3-5 paragraphs of detailed, formal request text.
-      - Include specific search findings in the body.
+      - Body MUST be 3-5 paragraphs of detailed, formal request text following this EXACT format:
+        1. Addressee: [Agency FOIA Officer, specific office if known]
+        2. Statutory basis: 5 U.S.C. § 552 (federal) or relevant state equivalent. Cite the specific subsection of FOIA that applies to the record type being requested.
+        3. Description of records sought: specific, bounded, not overly broad. Include specific accession numbers, box numbers, or folder titles found during search.
+        4. Preferred format: electronic if available.
+        5. Fee waiver justification: educational/research purpose under 5 U.S.C. § 552(a)(4)(A)(ii).
+        6. Response deadline acknowledgment: 20 business days per statute.
+        7. Contact information placeholder: [Your Contact Information].
       - NEVER use placeholder text like "Untitled Request", "Unknown Recipient", or "Research Inquiry".
       
       For each conclusion, provide detailed reasoning:
@@ -1802,6 +1853,8 @@ function ODENApp() {
           3. Department names and specific offices.
           4. Direct links to archival finding aids.
           
+          URL INTEGRITY (CRITICAL): NEVER hallucinate or guess a URL. ONLY use the exact URLs provided in the Google Search results. If a URL is not found, state that it is missing rather than providing a placeholder or a dead link.
+          
           Provide your findings in a clear, detailed summary. If you find multiple sources, list them all.`,
           tools: [{ googleSearch: {} }],
         },
@@ -1839,6 +1892,26 @@ function ODENApp() {
           8. STRUCTURAL PROBLEM CONCLUSION: Map findings back to the core methodology—explaining how the record destruction or absence fits into a system built for untraceability.
           9. AUTOMATIC POPULATION (CRITICAL): For EVERY new record, finding, or institutional detail you discover in the search results, you MUST generate a corresponding 'add_evidence' or 'add_request' action. Do not just describe them in the response; populate the system with them.
           
+          FACTUAL RIGOR & CATEGORIZATION (MANDATORY):
+          - SELF-CHECK BEFORE OUTPUT (REQUIRED): Before finalizing any output, perform this internal check on every named individual, date, institution, historical claim, and archival citation:
+            1. Does this claim appear in the user-provided data or a source retrieved via Google Search in this session?
+               - If yes: mark it [DOCUMENTED] and cite the source.
+            2. Is it a logical inference from documented data?
+               - If yes: mark it [INFERRED] and explicitly explain the "Structural Logic" or "Nexus" (e.g., "We connect A to B because they share the same business manager in 1905").
+            3. Is it structurally plausible but unverified?
+               - If yes: mark it [CANDIDATE] and flag it requires finding aid or primary source confirmation before use.
+            4. Does it contradict expected institutional logic or contain an unexplained absence?
+               - If yes: mark it [ANOMALY] and preserve it with the flag. Do not suppress anomalies.
+          - URL INTEGRITY & SOURCE LOCK (CRITICAL): 
+            1. NO HALLUCINATIONS: NEVER guess, construct, or "helpfully" provide a URL.
+            2. SOURCE LOCK: ONLY use exact URLs found in the raw Google Search tool output.
+            3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, or context sources.
+            4. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
+            5. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
+          - UNIVERSAL CITATIONS: Every historical claim, entity, or institutional detail surfaced MUST be backed by an entry in the 'citations' array.
+          - NO CONFLATION: Be extremely precise with entities. Do NOT conflate related but distinct individuals or organizations (e.g., do not conflate Phoebe Hearst with William Randolph Hearst; they represent different institutional agencies).
+          - PRECISION: Be exact with dates, figures, and acreage. If a figure is uncertain, state the range or label it as [INFERRED].
+          
           STATE MANAGEMENT & DEDUPLICATION:
           - DO NOT create duplicate logs, records, or requests.
           - If a new finding overlaps with an existing item, use 'update_status', 'update_request', or 'update_evidence'.
@@ -1849,15 +1922,30 @@ function ODENApp() {
           INSTITUTIONAL ROUTING & DRAFTING PROTOCOL (STRICT):
           1. IDENTIFY THE STATE: Determine if the record is an active agency record (FOIA), a declassification target (MDR), or an archival record (Archival Pull/Accession Inquiry).
           2. TARGET THE DESK: Use specific contact emails for the relevant desk (e.g., "NARA Textual Reference", "Special Access & FOIA Staff", "Museum Registrar", "Departmental Archivist").
-          3. DRAFT THE BODY: Provide a 3-5 paragraph formal request tailored to the specific type. 
+          3. DRAFT THE BODY: Provide a 3-5 paragraph formal request tailored to the specific type following this EXACT format:
+             1. Addressee: [Agency FOIA Officer, specific office if known]
+             2. Statutory basis: 5 U.S.C. § 552 (federal) or relevant state equivalent. Cite the specific subsection of FOIA that applies to the record type being requested.
+             3. Description of records sought: specific, bounded, not overly broad. Include specific accession numbers, box numbers, or folder titles found during search.
+             4. Preferred format: electronic if available.
+             5. Fee waiver justification: educational/research purpose under 5 U.S.C. § 552(a)(4)(A)(ii).
+             6. Response deadline acknowledgment: 20 business days per statute.
+             7. Contact information placeholder: [Your Contact Information].
              - Archival Inquiries should reference specific Box/Folder/Entry numbers and ask for pull instructions.
-             - FOIA requests should reference the FOIA statute (5 U.S.C. § 552).
              - Museum Inquiries should reference specific artifacts or accession numbers.
           4. NO PLACEHOLDERS: Use the specific Record Group (RG), Accession Number, or Office from the search findings.
           
           EVIDENCE PROTOCOL (MANDATORY):
           - 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
           - 'citation_url' MUST be the direct link to the record or finding.
+          - URL INTEGRITY & SOURCE LOCK (CRITICAL): NEVER hallucinate or guess a URL. ONLY use exact URLs found in the raw Google Search tool output. If no URL is found, state: '[URL NOT FOUND IN SEARCH]'.
+          - HIGH-DENSITY CONTEXT (MANDATORY): You MUST populate the following fields for every record:
+            * 'observed_content': Specific details, names, dates, or figures seen in the finding.
+            * 'why_it_matters': The contextual significance of this specific record.
+            * 'connection_logic': The structural link to the claim or other entities.
+            * 'significance': The impact on the overall pattern of evidence.
+            * 'institution_normalized': The clear, standardized name of the holding institution.
+            * 'entities': A list of actors or organizations mentioned in the record.
+            * 'timeline_date': The specific date or year associated with the record (YYYY-MM-DD or YYYY).
           - 'connection_logic' and 'significance' are MANDATORY.
           
           OUTPUT FORMAT:
@@ -1899,7 +1987,7 @@ function ODENApp() {
                   "destination_email": "archives2reference@nara.gov",
                   "mailing_address": "8601 Adelphi Road, College Park, MD",
                   "submission_portal": null,
-                  "verification_status": "Verified | Unverified | Guess",
+                  "verification_status": "CONFIRMED | PROBABLE | CANDIDATE",
                   "verification_source": "http://...",
                   "alternative_contacts": ["Phone: ...", "Portal: ..."]
                 }
@@ -2775,7 +2863,10 @@ function ODENApp() {
            - Submission Portal URL
            - Specific Department or Office name
         6. Find specific Record Group (RG) numbers, Accession Numbers, or Series Titles for the requested documents.
-        7. VERIFICATION PROTOCOL: If you find an email, cross-reference it with the official institutional website. If you are unsure, mark it as a "Guess" or "Unverified".
+        7. VERIFICATION PROTOCOL: If you find an email, cross-reference it with the official institutional website. 
+           - CONFIRMED TARGET: Institution and record group are verified against known holdings.
+           - PROBABLE TARGET: Institution is correct but specific location within collection requires finding aid confirmation before submitting.
+           - CANDIDATE TARGET: Plausible based on institutional logic but unverified, flag for research before use.
         
         OUTPUT: Provide a detailed text report of your findings. Be specific with URLs, emails, and archival identifiers.` }] }],
         config: { 
@@ -2804,6 +2895,14 @@ function ODENApp() {
         GOALS:
         1. Generate 10-15 Evidence Records (Dossier items) with detailed context.
            * EXHAUSTIVE SOURCING (MANDATORY): Do not limit yourself to 2-3 sources. If you found 10-15 relevant archival entries, finding aids, or documents, you MUST create a record for EACH one. Every unique piece of evidence found during the search must be represented.
+           * HIGH-DENSITY CONTEXT (MANDATORY): You MUST populate the following fields for every record:
+             * 'observed_content': Specific details, names, dates, or figures seen in the finding.
+             * 'why_it_matters': The contextual significance of this specific record.
+             * 'connection_logic': The structural link to the claim or other entities.
+             * 'significance': The impact on the overall pattern of evidence.
+             * 'institution_normalized': The clear, standardized name of the holding institution.
+             * 'entities': A list of actors or organizations mentioned in the record.
+             * 'timeline_date': The specific date or year associated with the record (YYYY-MM-DD or YYYY).
            * CRITICAL: 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
            * CRITICAL: 'citation_url' MUST be the direct link to the record or finding.
            * CRITICAL: 'connection_logic' and 'significance' are MANDATORY.
@@ -2813,9 +2912,21 @@ function ODENApp() {
         3. Draft 3-5 comprehensive FOIA requests for the identified gaps.
            * FOIA DRAFTING PROTOCOL (STRICT):
              - Use the EXACT contact details (emails, portals, addresses) found in the RESEARCH FINDINGS.
+             - AGENCY ACCURACY (CRITICAL): Ensure you target the correct parent agency. (e.g., RG 95 Forest Service is USDA, NOT DOI).
+             - CONTACT INTEGRITY (MANDATORY): 
+               * 'destination_email' MUST be a valid email address containing an '@' symbol.
+               * 'submission_portal' MUST be a URL (e.g., securefoia.doi.gov).
+               * NEVER put a portal URL in the 'destination_email' field.
              - Identify exact Record Group (RG), Accession Number, or Office.
-             - Body MUST be 3-5 paragraphs of detailed, formal request text. Include specific accession numbers, box numbers, or folder titles found during search. MUST NEVER BE EMPTY.
-             - 'verification_status': 'Verified' if found on official site, 'Unverified' if found on secondary site, 'Guess' if inferred.
+             - Body MUST be 3-5 paragraphs of detailed, formal request text following this EXACT format:
+               1. Addressee: [Agency FOIA Officer, specific office if known]
+               2. Statutory basis: 5 U.S.C. § 552 (federal) or relevant state equivalent. Cite the specific subsection of FOIA that applies to the record type being requested.
+               3. Description of records sought: specific, bounded, not overly broad. Include specific accession numbers, box numbers, or folder titles found during search.
+               4. Preferred format: electronic if available.
+               5. Fee waiver justification: educational/research purpose under 5 U.S.C. § 552(a)(4)(A)(ii).
+               6. Response deadline acknowledgment: 20 business days per statute.
+               7. Contact information placeholder: [Your Contact Information].
+             - 'verification_status': 'CONFIRMED' if institution and record group are verified against known holdings, 'PROBABLE' if institution is correct but specific location requires confirmation, 'CANDIDATE' if plausible based on logic but unverified.
              - 'verification_source': The URL where the contact info was found.
              - 'alternative_contacts': List other ways to reach them (phone, portal, different office).
         4. Create 5-8 Investigation Log leads.
@@ -2861,7 +2972,7 @@ function ODENApp() {
               "destination_email": "officer@agency.gov",
               "mailing_address": "Address",
               "submission_portal": "URL",
-              "verification_status": "Verified | Unverified | Guess",
+              "verification_status": "CONFIRMED | PROBABLE | CANDIDATE",
               "verification_source": "URL",
               "alternative_contacts": [{"type": "Phone", "value": "555-0199"}]
             }
@@ -3279,20 +3390,55 @@ function ODENApp() {
           10. BRAINSTORMING ACTIONS: Use the 'actions' array to suggest strategic pivots or brainstorming paths (e.g., "Pivot to Financial Trail", "Test Crossover Theory").
           11. AUTOMATIC POPULATION (CRITICAL): For EVERY new record, finding, or institutional detail you discover in the search results, you MUST generate a corresponding 'add_evidence' or 'add_request' action. Do not just describe them in the response; populate the system with them.
           
+          FACTUAL RIGOR & CATEGORIZATION (MANDATORY):
+          - SELF-CHECK BEFORE OUTPUT (REQUIRED): Before finalizing any output, perform this internal check on every named individual, date, institution, historical claim, and archival citation:
+            1. Does this claim appear in the user-provided data or a source retrieved via Google Search in this session?
+               - If yes: mark it [DOCUMENTED] and cite the source.
+            2. Is it a logical inference from documented data?
+               - If yes: mark it [INFERRED] and explicitly explain the "Structural Logic" or "Nexus" (e.g., "We connect A to B because they share the same business manager in 1905").
+            3. Is it structurally plausible but unverified?
+               - If yes: mark it [CANDIDATE] and flag it requires finding aid or primary source confirmation before use.
+            4. Does it contradict expected institutional logic or contain an unexplained absence?
+               - If yes: mark it [ANOMALY] and preserve it with the flag. Do not suppress anomalies.
+          - URL INTEGRITY & SOURCE LOCK (CRITICAL): 
+            1. NO HALLUCINATIONS: NEVER guess, construct, or "helpfully" provide a URL.
+            2. SOURCE LOCK: ONLY use exact URLs found in the raw Google Search tool output.
+            3. GLOBAL APPLICATION: This applies to ALL links—archival targets, historical sites, digitized assets, or context sources.
+            4. MISSING LINKS: If a search result provides information but no URL, or if you are citing a known institution without a direct link to the record, you MUST state: '[URL NOT FOUND IN SEARCH]'.
+            5. ASSET FOCUS: Prioritize linking to specific digitized assets or finding aid landing pages rather than institutional homepages.
+          - UNIVERSAL CITATIONS: Every historical claim, entity, or institutional detail surfaced MUST be backed by an entry in the 'citations' array.
+          - NO CONFLATION: Be extremely precise with entities. Do NOT conflate related but distinct individuals or organizations (e.g., do not conflate Phoebe Hearst with William Randolph Hearst; they represent different institutional agencies).
+          - PRECISION: Be exact with dates, figures, and acreage. If a figure is uncertain, state the range or label it as [INFERRED].
+          
           CRITICAL: Use the SEARCH FINDINGS provided to populate your actions. NEVER use placeholder text like "Unnamed", "Unknown", or "Untitled".
           
           INSTITUTIONAL ROUTING & DRAFTING PROTOCOL (STRICT):
           1. IDENTIFY THE STATE: Determine if the record is an active agency record (FOIA), a declassification target (MDR), or an archival record (Archival Pull/Accession Inquiry).
           2. TARGET THE DESK: Use specific contact emails for the relevant desk (e.g., "NARA Textual Reference", "Special Access & FOIA Staff", "Museum Registrar", "Departmental Archivist").
-          3. DRAFT THE BODY: Provide a 3-5 paragraph formal request tailored to the specific type. 
+          3. DRAFT THE BODY: Provide a 3-5 paragraph formal request tailored to the specific type following this EXACT format:
+             1. Addressee: [Agency FOIA Officer, specific office if known]
+             2. Statutory basis: 5 U.S.C. § 552 (federal) or relevant state equivalent. Cite the specific subsection of FOIA that applies to the record type being requested.
+             3. Description of records sought: specific, bounded, not overly broad. Include specific accession numbers, box numbers, or folder titles found during search.
+             4. Preferred format: electronic if available.
+             5. Fee waiver justification: educational/research purpose under 5 U.S.C. § 552(a)(4)(A)(ii).
+             6. Response deadline acknowledgment: 20 business days per statute.
+             7. Contact information placeholder: [Your Contact Information].
              - Archival Inquiries should reference specific Box/Folder/Entry numbers and ask for pull instructions.
-             - FOIA requests should reference the FOIA statute (5 U.S.C. § 552).
              - Museum Inquiries should reference specific artifacts or accession numbers.
           4. NO PLACEHOLDERS: Use the specific Record Group (RG), Accession Number, or Office from the search findings.
           
           EVIDENCE PROTOCOL (MANDATORY):
           - 'description' is the Contextual Analysis and MUST be a 2-3 sentence investigative summary.
           - 'citation_url' MUST be the direct link to the record or finding.
+          - URL INTEGRITY & SOURCE LOCK (CRITICAL): NEVER hallucinate or guess a URL. ONLY use exact URLs found in the raw Google Search tool output. If no URL is found, state: '[URL NOT FOUND IN SEARCH]'.
+          - HIGH-DENSITY CONTEXT (MANDATORY): You MUST populate the following fields for every record:
+            * 'observed_content': Specific details, names, dates, or figures seen in the finding.
+            * 'why_it_matters': The contextual significance of this specific record.
+            * 'connection_logic': The structural link to the claim or other entities.
+            * 'significance': The impact on the overall pattern of evidence.
+            * 'institution_normalized': The clear, standardized name of the holding institution.
+            * 'entities': A list of actors or organizations mentioned in the record.
+            * 'timeline_date': The specific date or year associated with the record (YYYY-MM-DD or YYYY).
           - 'connection_logic' and 'significance' are MANDATORY.
           
           OUTPUT FORMAT:
@@ -3928,7 +4074,7 @@ function ODENApp() {
                       { id: 'investigation', label: '04 Investigation Log', icon: History },
                       { id: 'sources', label: '05 Sources', icon: BookOpen },
                       { id: 'timeline', label: '06 Timeline', icon: Calendar },
-                      { id: 'chat', label: '07 Research Strategist', icon: Send },
+                      { id: 'chat', label: '07 Chat', icon: Send },
                       { id: 'requests', label: '08 FOIA/Archival Requests', icon: Mail },
                       { id: 'suggestions', label: '09 AI Suggestions', icon: Sparkles },
                       { id: 'data-management', label: '10 Data Management', icon: Save },
@@ -4041,7 +4187,7 @@ function ODENApp() {
             <div className="absolute right-0 top-full mt-2 w-48 bg-white border border-black shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-[70]">
               <div className="p-2 flex flex-col">
                 {[
-                  { id: 'chat', label: '07 Research Strategist', icon: Send },
+                  { id: 'chat', label: '07 Chat', icon: Send },
                   { id: 'requests', label: '08 FOIA/Archival Requests', icon: Mail },
                   { id: 'data-management', label: '10 Data Management', icon: Save },
                 ].map(item => (
@@ -4208,7 +4354,7 @@ function ODENApp() {
                             <div>
                               <h4 className="text-sm font-bold uppercase mb-2">Bridge the Threads</h4>
                               <p className="text-xs opacity-60 leading-relaxed">
-                                Use the AI Research Strategist to find "Structural Bridges"—recurring actors, shared protocols, or timeline anomalies that connect seemingly independent threads of investigation.
+                                Use the AI Chat to find "Structural Bridges"—recurring actors, shared protocols, or timeline anomalies that connect seemingly independent threads of investigation.
                               </p>
                             </div>
                           </div>
@@ -4624,15 +4770,33 @@ function ODENApp() {
                         <h3 className="col-header mb-4">Pipeline Execution Log</h3>
                         <div className="space-y-2">
                           {data.results.map((record, i) => (
-                            <div key={record.record_id || `record-${i}`} className="data-row p-4 flex items-center justify-between bg-white/30">
-                              <div className="flex items-center gap-4">
-                                <span className="text-[10px] font-mono opacity-30">{(i + 1).toString().padStart(2, '0')}</span>
-                                <div>
-                                  <p className="text-xs font-medium">{record.label || record.description}</p>
-                                  <p className="text-[9px] font-mono opacity-50 uppercase">{record.record_type}</p>
+                            <div 
+                              key={record.record_id || `record-${i}`} 
+                              className="data-row p-4 grid grid-cols-[40px_1.5fr_1fr_1fr_100px] gap-4 items-center bg-white/30 hover:bg-black hover:text-white transition-all group cursor-pointer"
+                              onClick={() => {
+                                setSelectedRecord(record);
+                                setIsSidebarOpen(true);
+                              }}
+                            >
+                              <span className="text-[10px] font-mono opacity-30 group-hover:opacity-100">{(i + 1).toString().padStart(2, '0')}</span>
+                              <div>
+                                <p className="text-xs font-medium line-clamp-1">{record.label || record.description}</p>
+                                <div className="flex gap-2 mt-1">
+                                  <span className="text-[8px] font-mono opacity-50 uppercase group-hover:opacity-100">{record.record_type}</span>
+                                  {record.timeline_date && <span className="text-[8px] font-mono opacity-50 uppercase group-hover:opacity-100">| {record.timeline_date}</span>}
                                 </div>
                               </div>
-                              <StatusBadge status={record.status} />
+                              <div className="hidden md:block">
+                                <p className="text-[9px] font-mono uppercase opacity-50 group-hover:opacity-100">Institution</p>
+                                <p className="text-[10px] truncate">{record.institution_normalized || 'N/A'}</p>
+                              </div>
+                              <div className="hidden lg:block">
+                                <p className="text-[9px] font-mono uppercase opacity-50 group-hover:opacity-100">Significance</p>
+                                <p className="text-[10px] line-clamp-1 italic">{record.significance || 'Analyzing...'}</p>
+                              </div>
+                              <div className="flex justify-end">
+                                <StatusBadge status={record.status} />
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -4906,18 +5070,34 @@ function ODENApp() {
                                 </div>
                               ) : (
                                 <div className="space-y-3">
+                                  {record.institution_normalized && (
+                                    <div className="flex items-center gap-2">
+                                      <div className="w-1 h-1 bg-black rounded-full" />
+                                      <span className="text-[9px] font-mono uppercase tracking-tighter">{record.institution_normalized}</span>
+                                    </div>
+                                  )}
                                   <div className="space-y-1">
                                     <span className="text-[8px] font-mono uppercase opacity-40">Observed Content:</span>
-                                    <p className="text-xs opacity-60 line-clamp-3 font-serif italic leading-relaxed">
+                                    <p className="text-xs opacity-60 line-clamp-2 font-serif italic leading-relaxed">
                                       {record.observed_content || record.description}
                                     </p>
                                   </div>
-                                  {record.why_it_matters && (
+                                  {(record.significance || record.why_it_matters) && (
                                     <div className="space-y-1">
                                       <span className="text-[8px] font-mono uppercase opacity-40">Significance:</span>
-                                      <p className="text-xs opacity-80 font-serif italic leading-relaxed">
-                                        {record.why_it_matters}
+                                      <p className="text-xs opacity-80 line-clamp-2 font-serif italic leading-relaxed">
+                                        {record.significance || record.why_it_matters}
                                       </p>
+                                    </div>
+                                  )}
+                                  {record.entities && record.entities.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 pt-1">
+                                      {record.entities.slice(0, 3).map((ent, idx) => (
+                                        <span key={idx} className="text-[7px] font-mono bg-stone-100 px-1 py-0.5 border border-black/5 uppercase">
+                                          {ent}
+                                        </span>
+                                      ))}
+                                      {record.entities.length > 3 && <span className="text-[7px] font-mono opacity-40">+{record.entities.length - 3} more</span>}
                                     </div>
                                   )}
                                 </div>
@@ -5050,10 +5230,23 @@ function ODENApp() {
                                 <span className="text-[10px] font-mono uppercase px-2 py-1 border border-black">{selectedRecord.classification || 'Unclassified'}</span>
                               </section>
                               <section>
-                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Strength</h5>
-                                <span className="text-[10px] font-mono uppercase px-2 py-1 border border-black">{selectedRecord.strength || 'Unknown'}</span>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Date / Timeline</h5>
+                                <span className="text-[10px] font-mono uppercase px-2 py-1 border border-black">{selectedRecord.timeline_date || 'N/A'}</span>
                               </section>
                             </div>
+
+                            {selectedRecord.entities && selectedRecord.entities.length > 0 && (
+                              <section>
+                                <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Associated Actors/Entities</h5>
+                                <div className="flex flex-wrap gap-2">
+                                  {selectedRecord.entities.map((ent, idx) => (
+                                    <span key={idx} className="text-[9px] font-mono bg-black text-white px-2 py-1 uppercase">
+                                      {ent}
+                                    </span>
+                                  ))}
+                                </div>
+                              </section>
+                            )}
 
                             <section>
                               <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Institutional Context</h5>
@@ -5530,7 +5723,9 @@ function ODENApp() {
                             </div>
                             {req.destination_email && (
                               <div className="flex justify-between items-center group/field">
-                                <p className="text-xs font-mono uppercase opacity-50">Email: <span className="text-black opacity-100 font-bold">{req.destination_email}</span></p>
+                                <p className="text-xs font-mono uppercase opacity-50">
+                                  {req.destination_email.includes('@') ? 'Email' : 'Contact'}: <span className="text-black opacity-100 font-bold">{req.destination_email}</span>
+                                </p>
                                 <div className="flex gap-2">
                                   <button onClick={() => { navigator.clipboard.writeText(req.destination_email); }} className="opacity-0 group-hover/field:opacity-100 transition-all text-[9px] font-mono uppercase underline">Copy</button>
                                 </div>
@@ -5553,11 +5748,11 @@ function ODENApp() {
                               <div className="flex items-center gap-2 mt-2 pt-2 border-t border-black/5">
                                 <span className={cn(
                                   "text-[8px] font-mono px-1.5 py-0.5 uppercase border flex items-center gap-1",
-                                  req.verification_status === 'Verified' ? "bg-green-50 border-green-600 text-green-700" :
-                                  req.verification_status === 'Unverified' ? "bg-yellow-50 border-yellow-600 text-yellow-700" :
-                                  "bg-red-50 border-red-600 text-red-700"
+                                  req.verification_status === 'CONFIRMED' ? "bg-green-50 border-green-600 text-green-700" :
+                                  req.verification_status === 'PROBABLE' ? "bg-yellow-50 border-yellow-600 text-yellow-700" :
+                                  "bg-stone-50 border-stone-600 text-stone-700"
                                 )}>
-                                  {req.verification_status === 'Verified' ? <CheckCircle2 className="w-2 h-2" /> : <AlertCircle className="w-2 h-2" />}
+                                  {req.verification_status === 'CONFIRMED' ? <CheckCircle2 className="w-2 h-2" /> : <AlertCircle className="w-2 h-2" />}
                                   {req.verification_status}
                                 </span>
                                 {req.verification_source && (
@@ -5598,13 +5793,13 @@ function ODENApp() {
                           <div className="flex gap-3">
                             {req.destination_email || req.submission_portal ? (
                               <a 
-                                href={req.destination_email ? `mailto:${req.destination_email}?subject=${encodeURIComponent(req.subject)}&body=${encodeURIComponent(req.body)}` : req.submission_portal}
-                                target={req.destination_email ? "_self" : "_blank"}
-                                rel={req.destination_email ? "" : "noreferrer"}
+                                href={req.destination_email?.includes('@') ? `mailto:${req.destination_email}?subject=${encodeURIComponent(req.subject)}&body=${encodeURIComponent(req.body)}` : (req.destination_email || req.submission_portal)}
+                                target={req.destination_email?.includes('@') ? "_self" : "_blank"}
+                                rel={req.destination_email?.includes('@') ? "" : "noreferrer"}
                                 onClick={() => updateRequestStatus(req.id, 'Sent')}
                                 className="flex-1 bg-black text-white p-3 text-center text-[10px] font-mono uppercase font-bold tracking-widest flex items-center justify-center gap-2 hover:bg-black/90 transition-all"
                               >
-                                <Send className="w-3 h-3" /> {req.destination_email ? 'Send via Mail Client' : 'Open Submission Portal'}
+                                <Send className="w-3 h-3" /> {req.destination_email?.includes('@') ? 'Send via Mail Client' : 'Open Submission Portal'}
                               </a>
                             ) : (
                               <div className="flex-1 bg-stone-100 text-stone-400 p-3 text-center text-[10px] font-mono uppercase font-bold tracking-widest flex items-center justify-center gap-2 border border-black/10 cursor-not-allowed">
@@ -6198,7 +6393,7 @@ function ODENApp() {
                                 <div className="flex items-center gap-4 mb-4 border-b border-black pb-4">
                                   <Brain className="w-6 h-6" />
                                   <div>
-                                    <h3 className="text-lg font-serif italic">Research Strategist</h3>
+                                    <h3 className="text-lg font-serif italic">Chat</h3>
                                     <p className="text-[8px] font-mono opacity-50 uppercase tracking-widest">Interactive Methodological Advisory</p>
                                   </div>
                                 </div>
@@ -7474,13 +7669,13 @@ function ODENApp() {
                       <div>
                         <label className="text-[10px] font-mono uppercase font-bold block mb-2">Verification Status</label>
                         <select 
-                          value={editingRequest.verification_status || 'Unverified'}
+                          value={editingRequest.verification_status || 'CANDIDATE'}
                           onChange={(e) => setEditingRequest({...editingRequest, verification_status: e.target.value as any})}
                           className="w-full border border-black p-3 font-sans text-sm focus:outline-none focus:ring-1 focus:ring-black"
                         >
-                          <option value="Verified">Verified</option>
-                          <option value="Unverified">Unverified</option>
-                          <option value="Guess">Guess</option>
+                          <option value="CONFIRMED">CONFIRMED TARGET</option>
+                          <option value="PROBABLE">PROBABLE TARGET</option>
+                          <option value="CANDIDATE">CANDIDATE TARGET</option>
                         </select>
                       </div>
                       <div>
@@ -8201,7 +8396,7 @@ function TimelineView({ records, onSelectRecord }: { records: EvidenceRecord[], 
         <Calendar className="w-12 h-12 opacity-20 mb-4" />
         <h3 className="text-xl font-serif italic mb-2">No Temporal Data Found.</h3>
         <p className="text-sm opacity-60 max-w-md leading-relaxed">
-          The current dossier does not contain records with verified dates. Use the Research Strategist to identify specific dates for your evidence.
+          The current dossier does not contain records with verified dates. Use the Chat to identify specific dates for your evidence.
         </p>
       </div>
     );

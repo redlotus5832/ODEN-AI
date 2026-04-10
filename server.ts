@@ -12,17 +12,23 @@ app.use(express.json());
 
 // --- API Endpoints ---
 
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 app.post("/api/report-error", async (req, res) => {
-  const { error, context, userEmail } = req.body;
-  
-  console.log(`[REPORT] Error reported by ${userEmail || 'anonymous'}:`);
-  console.log(`[REPORT] Error: ${error}`);
-  console.log(`[REPORT] Context: ${JSON.stringify(context)}`);
-  
-  // In a real production app, we would use a service like SendGrid or AWS SES here.
-  // For now, we log it prominently.
-  
-  res.json({ status: "success", message: "Error report received and logged." });
+  try {
+    const { error, context, userEmail } = req.body;
+    
+    console.log(`[REPORT] Error reported by ${userEmail || 'anonymous'}:`);
+    console.log(`[REPORT] Error: ${error}`);
+    console.log(`[REPORT] Context: ${JSON.stringify(context)}`);
+    
+    res.json({ status: "success", message: "Error report received and logged." });
+  } catch (e) {
+    console.error("Error in /api/report-error:", e);
+    res.status(500).json({ status: "error", message: "Internal server error" });
+  }
 });
 
 // --- Vite Middleware ---

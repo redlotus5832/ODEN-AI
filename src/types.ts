@@ -119,7 +119,7 @@ export interface Request {
   mailing_address?: string;
   fingerprint: string;
   createdAt: string;
-  verification_status?: 'Verified' | 'Unverified' | 'Guess';
+  verification_status?: 'CONFIRMED' | 'PROBABLE' | 'CANDIDATE';
   alternative_contacts?: { type: string; value: string }[];
   verification_source?: string;
 }

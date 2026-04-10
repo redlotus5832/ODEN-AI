@@ -706,12 +706,14 @@ function ODENApp() {
         setUserProfile(profile);
 
         // Listen for investigations where user is owner or collaborator
+        const conditions = [where('ownerId', '==', user.uid)];
+        if (user.email) {
+          conditions.push(where('collaboratorEmails', 'array-contains', user.email));
+        }
+
         const q = query(
           collection(db, 'investigations'),
-          or(
-            where('ownerId', '==', user.uid),
-            where('collaboratorEmails', 'array-contains', user.email)
-          )
+          or(...conditions)
         );
         
         unsubInvs = onSnapshot(q, (snapshot) => {
@@ -970,7 +972,7 @@ function ODENApp() {
     }
   }, [quotaExceeded]);
 
-  // Auto-save to Firestore and LocalStorage with debouncing
+  // Auto-save to LocalStorage (High frequency, all state)
   useEffect(() => {
     if (!isLoaded) return;
 
@@ -992,7 +994,7 @@ function ODENApp() {
         sourceFilter,
         uploadedFiles,
         strategistFeed,
-        updatedAt: user ? new Date().toISOString() : new Date().toISOString() // Use ISO string for local storage
+        updatedAt: new Date().toISOString()
       };
 
       // Save to LocalStorage
@@ -1017,50 +1019,44 @@ function ODENApp() {
           setInvestigations(updatedInvs);
         }
       }
-
-      // Save to Firestore if user is logged in and we have a current investigation
-      if (user && currentInvestigationId && !currentInvestigationId.startsWith('local-') && !quotaExceeded) {
-        const saveToFirestore = async () => {
-          try {
-            await updateDoc(doc(db, 'investigations', currentInvestigationId), {
-              data,
-              chatMessages,
-              requests,
-              sources,
-              researchPoints,
-              claim,
-              suggestions,
-              updatedAt: serverTimestamp()
-            });
-          } catch (e) {
-            handleFirestoreError(e, OperationType.UPDATE, `investigations/${currentInvestigationId}`);
-          }
-        };
-        saveToFirestore();
-      }
-    }, 2000); // 2-second debounce
+    }, 2000); // 2-second debounce for local storage
 
     return () => clearTimeout(timeoutId);
   }, [
-    isLoaded,
-    user,
-    currentInvestigationId,
-    data, 
-    chatMessages, 
-    requests, 
-    sources, 
-    researchPoints, 
-    claim, 
-    suggestions, 
-    suggestionChatMessages, 
-    activeTab, 
-    researchStep,
-    dossierSort,
-    dossierFilter,
-    investigationFilter,
-    sourceFilter,
-    uploadedFiles,
-    strategistFeed
+    isLoaded, user, currentInvestigationId, data, chatMessages, requests, sources, 
+    researchPoints, claim, suggestions, suggestionChatMessages, activeTab, 
+    researchStep, dossierSort, dossierFilter, investigationFilter, sourceFilter, 
+    uploadedFiles, strategistFeed, localTitle
+  ]);
+
+  // Auto-save to Firestore (Lower frequency, core data only)
+  useEffect(() => {
+    if (!isLoaded || !user || !currentInvestigationId || currentInvestigationId.startsWith('local-') || quotaExceeded) return;
+
+    const timeoutId = setTimeout(() => {
+      const saveToFirestore = async () => {
+        try {
+          await updateDoc(doc(db, 'investigations', currentInvestigationId), {
+            data,
+            chatMessages,
+            requests,
+            sources,
+            researchPoints,
+            claim,
+            suggestions,
+            updatedAt: serverTimestamp()
+          });
+        } catch (e) {
+          handleFirestoreError(e, OperationType.UPDATE, `investigations/${currentInvestigationId}`);
+        }
+      };
+      saveToFirestore();
+    }, 10000); // 10-second debounce for Firestore to save quota
+
+    return () => clearTimeout(timeoutId);
+  }, [
+    isLoaded, user, currentInvestigationId, quotaExceeded,
+    data, chatMessages, requests, sources, researchPoints, claim, suggestions
   ]);
 
   const downloadChatLog = () => {
@@ -8950,22 +8946,36 @@ function SettingsView({
                   placeholder="Paste your Gemini API Key..."
                   className="flex-1 bg-stone-50 border border-black/10 p-3 text-sm focus:outline-none focus:border-black transition-all"
                 />
-                <button 
-                  onClick={testGeminiKey}
-                  disabled={isTestingGemini || !customGeminiKey}
-                  className={cn(
-                    "w-full sm:w-auto px-4 sm:px-6 py-3 border border-black text-[10px] font-mono uppercase font-bold tracking-widest transition-all disabled:opacity-50 min-w-[60px] sm:min-w-[80px]",
-                    geminiTestStatus === 'success' ? "bg-emerald-500 text-white border-emerald-500" : 
-                    geminiTestStatus === 'error' ? "bg-red-500 text-white border-red-500" : "hover:bg-stone-50"
+                <div className="flex gap-2">
+                  <button 
+                    onClick={testGeminiKey}
+                    disabled={isTestingGemini || !customGeminiKey}
+                    className={cn(
+                      "flex-1 sm:flex-none px-4 sm:px-6 py-3 border border-black text-[10px] font-mono uppercase font-bold tracking-widest transition-all disabled:opacity-50 min-w-[60px] sm:min-w-[80px]",
+                      geminiTestStatus === 'success' ? "bg-emerald-500 text-white border-emerald-500" : 
+                      geminiTestStatus === 'error' ? "bg-red-500 text-white border-red-500" : "hover:bg-stone-50"
+                    )}
+                  >
+                    {isTestingGemini ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 
+                     geminiTestStatus === 'success' ? <Check className="w-4 h-4 mx-auto" /> :
+                     geminiTestStatus === 'error' ? <X className="w-4 h-4 mx-auto" /> : "Test Key"}
+                  </button>
+                  {customGeminiKey && (
+                    <button 
+                      onClick={() => {
+                        setCustomGeminiKey('');
+                        safeStorage.removeItem('oden_custom_gemini_key');
+                        window.location.reload();
+                      }}
+                      className="px-4 py-3 border border-red-600 text-red-600 text-[10px] font-mono uppercase font-bold hover:bg-red-50 transition-all"
+                    >
+                      Clear & Reset
+                    </button>
                   )}
-                >
-                  {isTestingGemini ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 
-                   geminiTestStatus === 'success' ? <Check className="w-4 h-4 mx-auto" /> :
-                   geminiTestStatus === 'error' ? <X className="w-4 h-4 mx-auto" /> : "Test Key"}
-                </button>
+                </div>
               </div>
               <p className="mt-2 text-[10px] opacity-40 leading-relaxed">
-                Overrides the default environment key. Useful for bypassing shared quotas. Get one at <a href="https://aistudio.google.com/app/apikey" target="_blank" className="underline">aistudio.google.com</a>.
+                Overrides the default environment key. To use the <strong>Free Tier</strong> provided by the platform, ensure this field is empty. Get a key at <a href="https://aistudio.google.com/app/apikey" target="_blank" className="underline">aistudio.google.com</a>.
               </p>
             </div>
 

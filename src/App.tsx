@@ -603,6 +603,7 @@ function ODENApp() {
 
   const [aiConnected, setAiConnected] = useState(false);
   const [customGeminiKey, setCustomGeminiKey] = useState(() => safeStorage.getItem('oden_custom_gemini_key') || '');
+  const [bypassPlatformKey, setBypassPlatformKey] = useState(() => safeStorage.getItem('oden_bypass_platform_key') === 'true');
   const [customFirebaseConfig, setCustomFirebaseConfig] = useState(() => safeStorage.getItem('oden_custom_firebase_config') || '');
   const [naraApiKey, setNaraApiKey] = useState(() => safeStorage.getItem('oden_nara_key') || '');
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string, content: string, type: string }[]>([]);
@@ -963,6 +964,10 @@ function ODENApp() {
   }, [customGeminiKey]);
 
   useEffect(() => {
+    safeStorage.setItem('oden_bypass_platform_key', String(bypassPlatformKey));
+  }, [bypassPlatformKey]);
+
+  useEffect(() => {
     safeStorage.setItem('oden_custom_firebase_config', customFirebaseConfig);
   }, [customFirebaseConfig]);
 
@@ -1075,9 +1080,9 @@ function ODENApp() {
   // --- Gemini AI Client-Side Logic ---
   
   const getGenAI = () => {
-    const apiKey = customGeminiKey || process.env.GEMINI_API_KEY;
+    const apiKey = customGeminiKey || (bypassPlatformKey ? undefined : process.env.GEMINI_API_KEY);
     if (!apiKey) {
-      throw new Error("Gemini API Key is missing. Please ensure it is configured in the environment or Settings.");
+      throw new Error("Gemini API Key is missing. Please ensure it is configured in the environment or Settings (Custom Infrastructure). If you want to use the Free Tier, try clicking 'Connect AI Engine' above.");
     }
     return new GoogleGenAI({ apiKey });
   };
@@ -6159,6 +6164,8 @@ function ODENApp() {
                 setQuotaExceeded={setQuotaExceeded}
                 customGeminiKey={customGeminiKey}
                 setCustomGeminiKey={setCustomGeminiKey}
+                bypassPlatformKey={bypassPlatformKey}
+                setBypassPlatformKey={setBypassPlatformKey}
                 customFirebaseConfig={customFirebaseConfig}
                 setCustomFirebaseConfig={setCustomFirebaseConfig}
               />
@@ -8522,6 +8529,8 @@ function SettingsView({
   setQuotaExceeded,
   customGeminiKey,
   setCustomGeminiKey,
+  bypassPlatformKey,
+  setBypassPlatformKey,
   customFirebaseConfig,
   setCustomFirebaseConfig
 }: { 
@@ -8549,6 +8558,8 @@ function SettingsView({
   setQuotaExceeded: (val: boolean) => void,
   customGeminiKey: string,
   setCustomGeminiKey: (val: string) => void,
+  bypassPlatformKey: boolean,
+  setBypassPlatformKey: (val: boolean) => void,
   customFirebaseConfig: string,
   setCustomFirebaseConfig: (val: string) => void
 }) {
@@ -8596,6 +8607,8 @@ function SettingsView({
         // The platform might not immediately return true for hasSelectedApiKey
         // but we can assume success if the dialog closed without error
         setAiConnected(true);
+        // If they are connecting via platform, they probably want to use that key
+        setBypassPlatformKey(false);
       } catch (err) {
         console.error("Failed to open key selection:", err);
       }
@@ -8977,6 +8990,23 @@ function SettingsView({
               <p className="mt-2 text-[10px] opacity-40 leading-relaxed">
                 Overrides the default environment key. To use the <strong>Free Tier</strong> provided by the platform, ensure this field is empty. Get a key at <a href="https://aistudio.google.com/app/apikey" target="_blank" className="underline">aistudio.google.com</a>.
               </p>
+            </div>
+
+            {/* Bypass Platform Secret */}
+            <div className="flex items-center justify-between p-4 bg-stone-50 border border-black/10">
+              <div>
+                <h4 className="text-[10px] font-mono uppercase font-bold">Ignore Platform Secret</h4>
+                <p className="text-[10px] opacity-60">Force the app to ignore the GEMINI_API_KEY set in the platform sidebar.</p>
+              </div>
+              <button 
+                onClick={() => setBypassPlatformKey(!bypassPlatformKey)}
+                className={cn(
+                  "px-4 py-2 text-[9px] font-mono uppercase font-bold border transition-all",
+                  bypassPlatformKey ? "bg-red-600 text-white border-red-600" : "border-black hover:bg-stone-100"
+                )}
+              >
+                {bypassPlatformKey ? "Bypass Active" : "Bypass Inactive"}
+              </button>
             </div>
 
             {/* Custom Firebase Config */}

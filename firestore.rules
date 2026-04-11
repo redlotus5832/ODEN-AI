@@ -58,6 +58,7 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() && (
         (request.auth.token.email == "kaylayglass@gmail.com" && request.auth.token.email_verified == true) ||
+        (request.auth.token.email == "audryastra@gmail.com" && request.auth.token.email_verified == true) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'user') == 'admin')
       );
@@ -80,11 +81,7 @@ service cloud.firestore {
              data.ownerId is string &&
              data.updatedAt is timestamp &&
              (!('collaborators' in data) || data.collaborators is list) &&
-             (!('collaboratorEmails' in data) || data.collaboratorEmails is list) &&
-             (!('chatMessages' in data) || data.chatMessages is list && data.chatMessages.size() < 1000) &&
-             (!('requests' in data) || data.requests is list && data.requests.size() < 500) &&
-             (!('sources' in data) || data.sources is list && data.sources.size() < 500) &&
-             (!('researchPoints' in data) || data.researchPoints is list && data.researchPoints.size() < 1000);
+             (!('collaboratorEmails' in data) || data.collaboratorEmails is list);
     }
 
     // Domain Validator for UserProfile
@@ -101,29 +98,24 @@ service cloud.firestore {
 
     // Investigations collection
     match /investigations/{investigationId} {
-      // Explicitly allow list if the query is properly filtered or user is admin
-      allow list: if isAuthenticated() && (
+      // Allow read (get and list) if the user is an admin or if they are the owner/collaborator
+      allow read: if isAuthenticated() && (
         isAdmin() || 
-        (request.query.limit <= 100) // Basic protection, the filters below will also be checked by Firestore
+        resource.data.get('ownerId', '') == request.auth.uid || 
+        request.auth.uid in resource.data.get('collaborators', []) ||
+        (request.auth.token.email != null && request.auth.token.email in resource.data.get('collaboratorEmails', []))
       );
       
-      allow get: if isAuthenticated() && (
-        resource.data.ownerId == request.auth.uid || 
-        (resource.data.collaborators is list && request.auth.uid in resource.data.collaborators) ||
-        (resource.data.collaboratorEmails is list && request.auth.token.email != null && request.auth.token.email in resource.data.collaboratorEmails) ||
-        isAdmin()
-      );
-
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidInvestigation(request.resource.data);
       
       allow update: if isAuthenticated() && (
-        resource.data.ownerId == request.auth.uid || 
-        (resource.data.collaborators is list && request.auth.uid in resource.data.collaborators) ||
-        (resource.data.collaboratorEmails is list && request.auth.token.email != null && request.auth.token.email in resource.data.collaboratorEmails) ||
-        isAdmin()
+        isAdmin() ||
+        resource.data.get('ownerId', '') == request.auth.uid || 
+        request.auth.uid in resource.data.get('collaborators', []) ||
+        (request.auth.token.email != null && request.auth.token.email in resource.data.get('collaboratorEmails', []))
       ) && isValidInvestigation(request.resource.data);
       
-      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && (resource.data.get('ownerId', '') == request.auth.uid || isAdmin());
     }
 
     // Users collection

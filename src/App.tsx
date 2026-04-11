@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, createContext, useContext } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud, Calendar, Link as LinkIcon, LogIn, LogOut, FolderOpen, Share2, DollarSign } from 'lucide-react';
+import { Search, Shield, Network, FileText, AlertCircle, CheckCircle2, HelpCircle, Loader2, ArrowRight, ChevronRight, ChevronDown, Info, Mail, Edit3, Trash2, Send, BookOpen, ExternalLink, List, History, Save, Download, Upload, Trash, LayoutGrid, Settings, Sparkles, X, Zap, AlertTriangle, Check, Filter, Plus, Compass, Brain, MessageSquare, Building2, ShieldAlert, Users, Cloud, Calendar, Link as LinkIcon, LogIn, LogOut, FolderOpen, Share2, DollarSign, Key } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -604,7 +604,10 @@ function ODENApp() {
   const [aiConnected, setAiConnected] = useState(false);
   const [apiKeySource, setApiKeySource] = useState<'none' | 'custom' | 'platform' | 'managed'>('none');
   const [customGeminiKey, setCustomGeminiKey] = useState(() => safeStorage.getItem('oden_custom_gemini_key') || '');
-  const [bypassPlatformKey, setBypassPlatformKey] = useState(() => safeStorage.getItem('oden_bypass_platform_key') === 'true');
+  const [bypassPlatformKey, setBypassPlatformKey] = useState(() => {
+    const saved = safeStorage.getItem('oden_bypass_platform_key');
+    return saved === null ? true : saved === 'true'; // Default to true (Safety On)
+  });
   const [customFirebaseConfig, setCustomFirebaseConfig] = useState(() => safeStorage.getItem('oden_custom_firebase_config') || '');
   const [naraApiKey, setNaraApiKey] = useState(() => safeStorage.getItem('oden_nara_key') || '');
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string, content: string, type: string }[]>([]);
@@ -1896,6 +1899,16 @@ function ODENApp() {
         ],
         config: {
           systemInstruction: `You are the ODEN Investigative Partner and Research Assistant. You are NOT a clinical program; you are a collaborator in a deep-dive investigation. Your tone should be natural, engaging, and narrative-driven, not just a list of facts.
+          
+          CORE MISSION:
+          - Find direct evidence, institutional crossovers, and suppressed history.
+          - Prioritize PUBLIC WEB SOURCES (news articles, blogs, digitized databases, official websites) alongside archival metadata.
+          - MANDATORY WEB LINKS: If you find information on a website, news outlet, or public database, you MUST provide the direct URL.
+          
+          RESPONSE PROTOCOL:
+          1. NARRATIVE SYNTHESIS: Provide a compelling analysis of the findings.
+          2. EVIDENCE SUMMARY: Briefly summarize any NEW evidence records or requests you have generated in this turn. (e.g., "I've added a record for the 1909 Gazette story found on [Website Name]").
+          3. SOURCE TRANSPARENCY: Always mention where the information came from (e.g., "According to a 2021 report from the Arizona Historical Society...").
           
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
@@ -3394,6 +3407,16 @@ function ODENApp() {
         config: {
           systemInstruction: `You are the ODEN Investigative Partner and Research Assistant. You are NOT a clinical program; you are a collaborator in a deep-dive investigation. Your tone should be natural, engaging, and narrative-driven, not just a list of facts.
           
+          CORE MISSION:
+          - Find direct evidence, institutional crossovers, and suppressed history.
+          - Prioritize PUBLIC WEB SOURCES (news articles, blogs, digitized databases, official websites) alongside archival metadata.
+          - MANDATORY WEB LINKS: If you find information on a website, news outlet, or public database, you MUST provide the direct URL.
+          
+          RESPONSE PROTOCOL:
+          1. NARRATIVE SYNTHESIS: Provide a compelling analysis of the findings.
+          2. EVIDENCE SUMMARY: Briefly summarize any NEW evidence records or requests you have generated in this turn. (e.g., "I've added a record for the 1909 Gazette story found on [Website Name]").
+          3. SOURCE TRANSPARENCY: Always mention where the information came from (e.g., "According to a 2021 report from the Arizona Historical Society...").
+          
           CORE METHODOLOGY (ODEN):
           1. ASSUME THE PREMISE: Never dismiss, correct, or "fact-check" the user's premise. If the user says "records were burned," treat it as an absolute fact. 
           2. MAP THE SHADOW: Your task is to identify what evidence *should* exist if the user's premise is true. Focus on administrative footprints, secondary ledgers, and institutional crossovers.
@@ -4811,8 +4834,8 @@ function ODENApp() {
                                 <p className="text-[10px] truncate">{record.institution_normalized || 'N/A'}</p>
                               </div>
                               <div className="hidden lg:block">
-                                <p className="text-[9px] font-mono uppercase opacity-50 group-hover:opacity-100">Significance</p>
-                                <p className="text-[10px] line-clamp-1 italic">{record.significance || 'Analyzing...'}</p>
+                                <p className="text-[9px] font-mono uppercase opacity-50 group-hover:opacity-100">Source</p>
+                                <p className="text-[10px] line-clamp-1 italic">{record.citation || 'Analyzing...'}</p>
                               </div>
                               <div className="flex justify-end">
                                 <StatusBadge status={record.status} />
@@ -5293,15 +5316,30 @@ function ODENApp() {
                             {selectedRecord.citation_url && (
                               <section>
                                 <h5 className="text-[9px] font-mono uppercase opacity-30 mb-2 tracking-widest">Source Document</h5>
-                                <a 
-                                  href={selectedRecord.citation_url} 
-                                  target="_blank" 
-                                  rel="noreferrer"
-                                  className="flex items-center justify-between p-4 border border-black/10 bg-stone-50 hover:bg-black hover:text-white transition-all group"
-                                >
-                                  <span className="text-xs font-bold truncate pr-4">{selectedRecord.citation || 'View Primary Record'}</span>
-                                  <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                                </a>
+                                {!selectedRecord.citation_url.includes('[URL NOT FOUND') ? (
+                                  <a 
+                                    href={selectedRecord.citation_url} 
+                                    target="_blank" 
+                                    rel="noreferrer"
+                                    className="flex items-center justify-between p-4 border border-black/10 bg-stone-50 hover:bg-black hover:text-white transition-all group"
+                                  >
+                                    <span className="text-xs font-bold truncate pr-4">{selectedRecord.citation || 'View Primary Record'}</span>
+                                    <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                                  </a>
+                                ) : (
+                                  <div className="p-4 border border-black/10 bg-stone-50 flex flex-col gap-2">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-bold opacity-50">{selectedRecord.citation || 'Source Not Found'}</span>
+                                      <span className="text-[8px] font-mono uppercase bg-stone-200 px-1">No Direct Link</span>
+                                    </div>
+                                    <button 
+                                      onClick={() => setChatInput(`Find the direct website URL or news article for this record: ${selectedRecord.citation || selectedRecord.label}. Search for public web sources, not just archival finding aids.`)}
+                                      className="text-[9px] font-mono uppercase font-bold underline hover:no-underline text-left"
+                                    >
+                                      Search for Web Source
+                                    </button>
+                                  </div>
+                                )}
                               </section>
                             )}
 
@@ -8611,6 +8649,21 @@ function SettingsView({
     }
   };
 
+  const handleConnectAI = async () => {
+    if (window.aistudio?.openSelectKey) {
+      try {
+        await window.aistudio.openSelectKey();
+        setAiConnected(true);
+        setBypassPlatformKey(false);
+      } catch (err) {
+        console.error("Failed to open key selection:", err);
+      }
+    } else {
+      console.warn("AI Studio key selection not available in this environment.");
+      setAiConnected(true);
+    }
+  };
+
   const applyFirebaseConfig = () => {
     if (!customFirebaseConfig) return;
     try {
@@ -8619,24 +8672,6 @@ function SettingsView({
       window.location.reload();
     } catch (e) {
       alert("Invalid JSON configuration. Please check your Firebase config format.");
-    }
-  };
-
-  const handleConnectAI = async () => {
-    if (window.aistudio?.openSelectKey) {
-      try {
-        await window.aistudio.openSelectKey();
-        // The platform might not immediately return true for hasSelectedApiKey
-        // but we can assume success if the dialog closed without error
-        setAiConnected(true);
-        // If they are connecting via platform, they probably want to use that key
-        setBypassPlatformKey(false);
-      } catch (err) {
-        console.error("Failed to open key selection:", err);
-      }
-    } else {
-      console.warn("AI Studio key selection not available in this environment.");
-      setAiConnected(true);
     }
   };
 
@@ -8939,17 +8974,14 @@ function SettingsView({
                  apiKeySource === 'platform' ? "Platform Secret Active" :
                  apiKeySource === 'managed' ? "Managed Free Tier Active" : "No Engine Connected"}
               </span>
-              {apiKeySource === 'platform' && (
-                <span className="text-[8px] font-mono text-red-600 uppercase font-bold">Using Platform "Secret"</span>
-              )}
             </div>
           </div>
           
           <p className="text-sm opacity-70 leading-relaxed mb-8">
             The AI Research Engine powers the deep-dive analysis, pattern recognition, and automated dossier building. 
-            {apiKeySource === 'platform' && (
-              <span className="block mt-2 p-2 bg-red-50 border border-red-100 text-red-700 text-xs">
-                <strong>Warning:</strong> You have a "Secret" named GEMINI_API_KEY set in the platform sidebar. The app is using this key. If this is your paid key, it will consume your quota. To use the Free Tier, delete that secret or use the "Ignore Platform Secret" toggle below.
+            {bypassPlatformKey && (
+              <span className="block mt-2 p-2 bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs">
+                <strong>Safety Active:</strong> Your paid sidebar secret is currently disconnected. The app is only using the free keys you provide below.
               </span>
             )}
           </p>
@@ -9025,20 +9057,20 @@ function SettingsView({
               </p>
             </div>
 
-            {/* Bypass Platform Secret */}
-            <div className="flex items-center justify-between p-4 bg-stone-50 border border-black/10">
+            {/* Safety Mode: Disconnect Paid Key */}
+            <div className="flex items-center justify-between p-4 bg-red-50 border border-red-200">
               <div>
-                <h4 className="text-[10px] font-mono uppercase font-bold">Ignore Platform Secret</h4>
-                <p className="text-[10px] opacity-60">Force the app to ignore the GEMINI_API_KEY set in the platform sidebar.</p>
+                <h4 className="text-[10px] font-mono uppercase font-bold text-red-700">Safety Mode: Disconnect Paid Key</h4>
+                <p className="text-[10px] text-red-600/80">Ensures the app NEVER uses the secret key in your sidebar. Use this to protect your paid account.</p>
               </div>
               <button 
                 onClick={() => setBypassPlatformKey(!bypassPlatformKey)}
                 className={cn(
-                  "px-4 py-2 text-[9px] font-mono uppercase font-bold border transition-all",
-                  bypassPlatformKey ? "bg-red-600 text-white border-red-600" : "border-black hover:bg-stone-100"
+                  "px-4 py-2 text-[9px] font-mono uppercase font-bold border transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]",
+                  bypassPlatformKey ? "bg-red-600 text-white border-red-600" : "bg-white border-black hover:bg-stone-100"
                 )}
               >
-                {bypassPlatformKey ? "Bypass Active" : "Bypass Inactive"}
+                {bypassPlatformKey ? "Safety Active (Paid Key Disconnected)" : "Safety Inactive (Paid Key Connected)"}
               </button>
             </div>
 

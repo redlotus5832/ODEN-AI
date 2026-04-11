@@ -158,6 +158,9 @@ const safeGenerateContent = async (genAI: any, params: any, retries = 3): Promis
   }
 };
 
+// --- Constants & Configuration ---
+const HARDWIRED_FREE_KEY = "AIzaSyCBkSPLNbiuu3dd4c67HR5UKqtRw42gVkY";
+
 const safeStorage = {
   getItem: (key: string): string | null => {
     try {
@@ -973,17 +976,11 @@ function ODENApp() {
     if (customGeminiKey) {
       setApiKeySource('custom');
       setAiConnected(true);
-    } else if (bypassPlatformKey) {
-      setApiKeySource('none');
-      setAiConnected(false);
-    } else if (process.env.GEMINI_API_KEY) {
-      setApiKeySource('platform');
-      setAiConnected(true);
     } else {
-      setApiKeySource('none');
-      setAiConnected(false);
+      setApiKeySource('managed');
+      setAiConnected(true);
     }
-  }, [customGeminiKey, bypassPlatformKey]);
+  }, [customGeminiKey]);
 
   useEffect(() => {
     safeStorage.setItem('oden_custom_firebase_config', customFirebaseConfig);
@@ -1098,10 +1095,7 @@ function ODENApp() {
   // --- Gemini AI Client-Side Logic ---
   
   const getGenAI = () => {
-    const apiKey = customGeminiKey || (bypassPlatformKey ? undefined : process.env.GEMINI_API_KEY);
-    if (!apiKey) {
-      throw new Error("Gemini API Key is missing. This usually happens if you've cleared your keys but haven't 'Connected' to the platform's free tier. Click 'Connect AI Engine' in Settings to restore access.");
-    }
+    const apiKey = customGeminiKey || HARDWIRED_FREE_KEY;
     return new GoogleGenAI({ apiKey });
   };
 
@@ -8979,9 +8973,9 @@ function SettingsView({
           
           <p className="text-sm opacity-70 leading-relaxed mb-8">
             The AI Research Engine powers the deep-dive analysis, pattern recognition, and automated dossier building. 
-            {bypassPlatformKey && (
+            {apiKeySource === 'managed' && (
               <span className="block mt-2 p-2 bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs">
-                <strong>Safety Active:</strong> Your paid sidebar secret is currently disconnected. The app is only using the free keys you provide below.
+                <strong>Managed Free Tier Active:</strong> The app is using a built-in free key. No setup required.
               </span>
             )}
           </p>
@@ -9057,21 +9051,15 @@ function SettingsView({
               </p>
             </div>
 
-            {/* Safety Mode: Disconnect Paid Key */}
-            <div className="flex items-center justify-between p-4 bg-red-50 border border-red-200">
+            {/* Managed Engine Info */}
+            <div className="flex items-center justify-between p-4 bg-stone-50 border border-black/10">
               <div>
-                <h4 className="text-[10px] font-mono uppercase font-bold text-red-700">Safety Mode: Disconnect Paid Key</h4>
-                <p className="text-[10px] text-red-600/80">Ensures the app NEVER uses the secret key in your sidebar. Use this to protect your paid account.</p>
+                <h4 className="text-[10px] font-mono uppercase font-bold">Managed AI Engine</h4>
+                <p className="text-[10px] opacity-60 text-emerald-600 font-bold">Status: Connected & Secured (Paid Key Ignored)</p>
               </div>
-              <button 
-                onClick={() => setBypassPlatformKey(!bypassPlatformKey)}
-                className={cn(
-                  "px-4 py-2 text-[9px] font-mono uppercase font-bold border transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]",
-                  bypassPlatformKey ? "bg-red-600 text-white border-red-600" : "bg-white border-black hover:bg-stone-100"
-                )}
-              >
-                {bypassPlatformKey ? "Safety Active (Paid Key Disconnected)" : "Safety Inactive (Paid Key Connected)"}
-              </button>
+              <div className="px-4 py-2 text-[9px] font-mono uppercase font-bold border border-emerald-500 bg-emerald-50 text-emerald-700">
+                Active
+              </div>
             </div>
 
             {/* Custom Firebase Config */}
